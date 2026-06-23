@@ -6,6 +6,7 @@ import type { ExtensionContext, WidgetPlacement } from "@mariozechner/pi-coding-
 import { allocateImageId, deleteKittyImage, Image } from "@mariozechner/pi-tui";
 import { encode as encodePng } from "fast-png";
 import type { AudioPlayer } from "./audio.js";
+import { makeUpscaler } from "./upscale.js";
 
 const GBA_W = 240;
 const GBA_H = 160;
@@ -331,87 +332,6 @@ class CustomRenderBackend implements RenderBackend {
 }
 
 // ---------------------------------------------------------------------------
-// Upscaling helpers
-// ---------------------------------------------------------------------------
-
-function makeUpscaler(
-  scale: 1 | 2 | 3,
-  outW: number,
-  outH: number,
-): {
-  upscale(rgba: Uint8Array): Uint8Array;
-} {
-  const scratch = scale > 1 ? new Uint8Array(outW * outH * 4) : new Uint8Array(0);
-
-  function upscale2(rgba: Uint8Array): Uint8Array {
-    for (let sy = 0; sy < GBA_H; sy++) {
-      const dy0 = sy * 2;
-      for (let sx = 0; sx < GBA_W; sx++) {
-        const si = (sy * GBA_W + sx) * 4;
-        const r = rgba[si];
-        const g = rgba[si + 1];
-        const b = rgba[si + 2];
-        // Force alpha opaque: mGBA writes M_COLOR_WHITE = 0x00FFFFFF (alpha=0);
-        // Kitty would render those pixels transparent. See ADR 0005.
-        const dx0 = sx * 2;
-        const di00 = (dy0 * outW + dx0) * 4;
-        const di01 = di00 + 4;
-        const di10 = ((dy0 + 1) * outW + dx0) * 4;
-        const di11 = di10 + 4;
-        scratch[di00] = r;
-        scratch[di00 + 1] = g;
-        scratch[di00 + 2] = b;
-        scratch[di00 + 3] = 0xff;
-        scratch[di01] = r;
-        scratch[di01 + 1] = g;
-        scratch[di01 + 2] = b;
-        scratch[di01 + 3] = 0xff;
-        scratch[di10] = r;
-        scratch[di10 + 1] = g;
-        scratch[di10 + 2] = b;
-        scratch[di10 + 3] = 0xff;
-        scratch[di11] = r;
-        scratch[di11 + 1] = g;
-        scratch[di11 + 2] = b;
-        scratch[di11 + 3] = 0xff;
-      }
-    }
-    return scratch;
-  }
-
-  function upscale3(rgba: Uint8Array): Uint8Array {
-    for (let sy = 0; sy < GBA_H; sy++) {
-      for (let sx = 0; sx < GBA_W; sx++) {
-        const si = (sy * GBA_W + sx) * 4;
-        const r = rgba[si];
-        const g = rgba[si + 1];
-        const b = rgba[si + 2];
-        for (let dy = 0; dy < 3; dy++) {
-          for (let dx = 0; dx < 3; dx++) {
-            const di = ((sy * 3 + dy) * outW + (sx * 3 + dx)) * 4;
-            scratch[di] = r;
-            scratch[di + 1] = g;
-            scratch[di + 2] = b;
-            scratch[di + 3] = 0xff;
-          }
-        }
-      }
-    }
-    return scratch;
-  }
-
-  return {
-    upscale(rgba: Uint8Array): Uint8Array {
-      if (scale === 1) {
-        for (let i = 3; i < rgba.length; i += 4) rgba[i] = 0xff;
-        return rgba;
-      }
-      return scale === 2 ? upscale2(rgba) : upscale3(rgba);
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
 // createRenderer — factory
 // ---------------------------------------------------------------------------
 
@@ -494,6 +414,36 @@ export function createRenderer(
     return { kind: "png", bytes: png, width: outW, height: outH };
   }
 
+  /**
+   * The shared frame-production pipeline: read the framebuffer, upscale it, and
+   * encode it for the active backend. May throw; the three call sites (live
+   * tick, layout flush, still-frame) each wrap it in their own RenderTickError
+   * handling. Does NOT step the emulator — callers that need a step do it first.
+   */
+  function produceFrame(): FramePayload {
+    return encodeForBackend(upscale(emulator.getFramebuffer()));
+  }
+
+  /**
+   * Drain the audio ring completely into the player and return the frame count
+   * pulled (for tracing). The core produces ~2186 frames per step(2) at its
+   * native 65536 Hz, exceeding the 2048-frame cap of a single getAudioSamples
+   * read; a single capped read leaks ~138 frames/tick into the ring until it
+   * saturates and drops samples (audible crackle). The iteration bound guards a
+   * pathological ring that never reports empty. No-op when audio is disabled.
+   */
+  function drainAudio(): number {
+    if (!audio || !emulator.getAudioSamples) return 0;
+    let pcmLen = 0;
+    for (let i = 0; i < 8; i++) {
+      const pcm = emulator.getAudioSamples(2048);
+      if (pcm.length === 0) break;
+      pcmLen += pcm.length;
+      audio.writeSamples(pcm);
+    }
+    return pcmLen;
+  }
+
   // 10c Bug 3 probe: opt-in per-tick audio tracing behind PI_GBA_AUDIO_TRACE=1.
   // Used to diagnose jitter in the wild: captures inter-tick interval (ms),
   // samples pulled per tick, and stdin writableLength at emission time.
@@ -506,29 +456,13 @@ export function createRenderer(
     try {
       const tickStart = audioTraceEnabled ? performance.now() : 0;
       emulator.step(2);
-      let pcmLen = 0;
+      const pcmLen = drainAudio();
       let writableLen: number | undefined;
-      if (audio && emulator.getAudioSamples) {
-        // Drain the ring completely: the core produces ~2186 frames per
-        // step(2) at its native 65536 Hz, which exceeds the 2048-frame
-        // scratch-buffer cap of a single getAudioSamples call. A single
-        // capped read leaks ~138 frames/tick into the ring until it
-        // saturates and drops samples (audible crackle). Iteration bound
-        // guards against a pathological ring that never reports empty.
-        for (let i = 0; i < 8; i++) {
-          const pcm = emulator.getAudioSamples(2048);
-          if (pcm.length === 0) break;
-          pcmLen += pcm.length;
-          audio.writeSamples(pcm);
-        }
-        if (audioTraceEnabled) {
-          const probe = audio as unknown as { __probeWritableLength?: () => number | undefined };
-          writableLen = typeof probe.__probeWritableLength === "function" ? probe.__probeWritableLength() : undefined;
-        }
+      if (audio && audioTraceEnabled) {
+        const probe = audio as unknown as { __probeWritableLength?: () => number | undefined };
+        writableLen = typeof probe.__probeWritableLength === "function" ? probe.__probeWritableLength() : undefined;
       }
-      const rgba = emulator.getFramebuffer();
-      const scaled = upscale(rgba);
-      backend.pushFrame(encodeForBackend(scaled));
+      backend.pushFrame(produceFrame());
       if (audioTraceEnabled) {
         const now = tickStart;
         const dt = lastTickAt === 0 ? 0 : now - lastTickAt;
@@ -557,9 +491,9 @@ export function createRenderer(
    */
   function flushFrameToCurrentBackend(): void {
     try {
-      const rgba = emulator.getFramebuffer();
-      const scaled = upscale(rgba);
-      const payload = encodeForBackend(scaled);
+      const payload = produceFrame();
+      // Widget: bypass the live-tick gate via writeFrame so the layout change
+      // is reflected even when ambient ticking is off. Custom: pushFrame.
       if (activeKind === "widget" && payload.kind === "png") {
         widgetBackend.writeFrame(payload);
       } else {
@@ -663,10 +597,9 @@ export function createRenderer(
       // one-shot flush even when widget live-tick is disabled.
       if (activeKind !== "widget") return;
       try {
-        const rgba = emulator.getFramebuffer();
-        const scaled = upscale(rgba);
-        const png = encodePng({ width: outW, height: outH, data: scaled, depth: 8, channels: 4 });
-        widgetBackend.writeFrame({ kind: "png", bytes: png, width: outW, height: outH });
+        // activeKind === "widget" → produceFrame yields a PNG payload.
+        const payload = produceFrame();
+        if (payload.kind === "png") widgetBackend.writeFrame(payload);
       } catch (e) {
         const err = new RenderTickError("showStillFrame failed", e);
         for (const cb of errorListeners) cb(err);
