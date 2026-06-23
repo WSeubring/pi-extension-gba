@@ -18,12 +18,14 @@ import type { Emulator } from "./emulator.js";
 import { createEmulator } from "./emulator.js";
 import { HeldButtons } from "./held-buttons.js";
 import { classifyGbaKey } from "./input.js";
-import type { Lifecycle, RenderController } from "./lifecycle.js";
+import type { Lifecycle } from "./lifecycle.js";
+import { NOOP_RENDER } from "./lifecycle.js";
 import { createUnsupportedNotifier } from "./messages.js";
 import type { Persistence } from "./persistence.js";
 import { createPersistence } from "./persistence.js";
 import type { EmulatorLike, RenderControllerWithSwap } from "./render.js";
 import { createRenderer } from "./render.js";
+import { teardownCore } from "./teardown.js";
 import type { ButtonSink } from "./types.js";
 
 const NOOP_LIFECYCLE: Lifecycle = {
@@ -40,14 +42,6 @@ const NOOP_LIFECYCLE: Lifecycle = {
     return false;
   },
   acknowledgeCrash() {},
-};
-
-const NOOP_RENDER: RenderController = {
-  start() {},
-  stop() {},
-  shrink() {},
-  expand() {},
-  hide() {},
 };
 
 /**
@@ -143,17 +137,6 @@ export function wireMinimal(
   const { emulator, persistence, cfg, caps } = deps;
   const makeRenderer = seams.createRenderer ?? createRenderer;
 
-  let destroyed = false;
-  function destroyEmulator(): void {
-    if (destroyed) return;
-    destroyed = true;
-    try {
-      emulator.destroy();
-    } catch {
-      /* best-effort */
-    }
-  }
-
   const notifyUnsupported = createUnsupportedNotifier();
 
   let activeRender: RenderControllerWithSwap | undefined;
@@ -230,26 +213,13 @@ export function wireMinimal(
     handler: (ctx) => toggleOverlay(ctx),
   });
 
+  let toreDown = false;
   pi.on("session_shutdown", async () => {
-    // Best-effort save-state snapshot first (mirrors the full-mode shutdown
-    // in index.ts) so a clean exit doesn't lose up to 30s of progress.
-    try {
-      await persistence.snapshot();
-    } catch {
-      /* best-effort */
-    }
-    destroyRender();
-    try {
-      await persistence.flushPending();
-    } catch {
-      /* best-effort */
-    }
-    try {
-      persistence.destroy();
-    } catch {
-      /* best-effort */
-    }
-    destroyEmulator();
+    // Guard re-entry: pi may fire session_shutdown more than once, and the
+    // shared teardown is not itself idempotent.
+    if (toreDown) return;
+    toreDown = true;
+    await teardownCore({ persistence, emulator, render: activeRender });
   });
 }
 

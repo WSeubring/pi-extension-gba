@@ -7,13 +7,14 @@ import { registerAll } from "./commands.js";
 import { resolveConfig } from "./config.js";
 import { createEmulator } from "./emulator.js";
 import type { RenderController } from "./lifecycle.js";
-import { createLifecycle } from "./lifecycle.js";
+import { createLifecycle, NOOP_RENDER } from "./lifecycle.js";
 import { createUnsupportedNotifier, requireAudio, toggleMute } from "./messages.js";
 import activateMinimal from "./minimal-activate.js";
 import { createPersistence } from "./persistence.js";
 import type { RenderController as PhaseRenderController, RenderControllerWithSwap } from "./render.js";
 import { createRenderer } from "./render.js";
 import { createSessionCoordinator } from "./session-coordinator.js";
+import { teardownCore } from "./teardown.js";
 
 // ctx resolution: renderer construction requires an ExtensionCommandContext (for
 // ctx.ui.setWidget), which is only available per-call. We defer renderer
@@ -62,14 +63,6 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
   // Live audio gate: re-evaluated on every access so /gba config changes
   // apply immediately. Undefined = silent (disabled or no backend tool).
   const getAudio = (): AudioPlayer | undefined => (audioEnabled(cfg.audio) ? audioPlayer : undefined);
-
-  const NOOP_RENDER: RenderController = {
-    start() {},
-    stop() {},
-    shrink() {},
-    expand() {},
-    hide() {},
-  };
 
   function ensureRender(ctx: ExtensionCommandContext): RenderController {
     lastCtx = ctx;
@@ -166,29 +159,14 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
   });
 
   pi.on("session_shutdown", async () => {
-    try {
-      await persistence.snapshot();
-    } catch (err) {
-      console.warn(`[pi-extension-gba] session_shutdown snapshot failed: ${String((err as Error)?.message ?? err)}`);
-    }
+    // Stop dispatching agent events first, then run the shared core teardown.
     coordinator.detach();
     autoFocus.detach();
-    await persistence.flushPending();
-    persistence.destroy();
-    try {
-      (render as PhaseRenderController | undefined)?.destroy();
-    } catch (err) {
-      console.warn(`[pi-extension-gba] render.destroy failed: ${String((err as Error)?.message ?? err)}`);
-    }
-    try {
-      await audioPlayer?.stop();
-    } catch (err) {
-      console.warn(`[pi-extension-gba] audio.stop failed: ${String((err as Error)?.message ?? err)}`);
-    }
-    try {
-      emulator.destroy();
-    } catch (err) {
-      console.warn(`[pi-extension-gba] emulator.destroy failed: ${String((err as Error)?.message ?? err)}`);
-    }
+    await teardownCore({
+      persistence,
+      emulator,
+      render: render as PhaseRenderController | undefined,
+      audio: audioPlayer,
+    });
   });
 }

@@ -14,6 +14,18 @@ export interface RenderController {
   showStillFrame?(): void;
 }
 
+/**
+ * No-op render controller used before a renderer exists (no ROM loaded) or when
+ * the terminal lacks Kitty graphics. Shared by both activation paths.
+ */
+export const NOOP_RENDER: RenderController = {
+  start() {},
+  stop() {},
+  shrink() {},
+  expand() {},
+  hide() {},
+};
+
 export interface LifecycleOptions {
   autoRunOnAgentStart: boolean;
   autoHideOnAgentEnd: boolean;
