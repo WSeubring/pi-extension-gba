@@ -1,5 +1,7 @@
 # pi-extension-gba
 
+[![CI](https://github.com/WSeubring/pi-extension-gba/actions/workflows/ci.yml/badge.svg)](https://github.com/WSeubring/pi-extension-gba/actions/workflows/ci.yml)
+
 **Play Game Boy Advance games inside [pi](https://github.com/badlogic/pi-mono) — right in your terminal, while the agent works.**
 
 When the agent is busy thinking, the game takes over your screen. The moment it
