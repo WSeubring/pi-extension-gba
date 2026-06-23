@@ -1,0 +1,33 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  id-token: write # OIDC for npm trusted publishing
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # Install dev deps (TypeScript/Biome) so the gate + the prepare build run.
+      - run: npm ci
+
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+
+      # OIDC trusted publishing needs npm >= 11.5.1; Node 22 ships 10.x. Use npx
+      # to avoid the `npm i -g npm@latest` bootstrap bug on Node 22. `prepare`
+      # runs the tsc build; --provenance attests the build to the registry.
+      - run: npx -y npm@latest publish --access public --provenance
