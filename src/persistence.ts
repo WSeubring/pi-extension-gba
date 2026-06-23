@@ -1,8 +1,8 @@
 import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
 import type { Emulator } from "./emulator.js";
 import { StateIoError } from "./emulator.js";
+import { expandHome } from "./paths.js";
 
 export { StateIoError };
 
@@ -39,13 +39,9 @@ export interface PersistenceOptions {
 }
 
 function resolveRomDir(romDir: string): string {
-  // Only `~` exactly or a `~/` prefix refer to $HOME; `~user/...` names
-  // another user's home and must be left untouched.
-  if (romDir === "~") return homedir();
-  if (romDir.startsWith("~/")) {
-    return path.join(homedir(), romDir.slice(2));
-  }
-  return path.resolve(romDir);
+  // `expandHome` resolves the tilde forms; `path.resolve` makes a plain
+  // relative dir absolute (no-op once already absolute, e.g. after expansion).
+  return path.resolve(expandHome(romDir));
 }
 
 function stripGba(basename: string): string {

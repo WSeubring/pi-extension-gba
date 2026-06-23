@@ -18,6 +18,7 @@ import type { Emulator } from "./emulator.js";
 import { createEmulator } from "./emulator.js";
 import { classifyGbaKey } from "./input.js";
 import type { Lifecycle, RenderController } from "./lifecycle.js";
+import { createUnsupportedNotifier } from "./messages.js";
 import type { Persistence } from "./persistence.js";
 import { createPersistence } from "./persistence.js";
 import type { EmulatorLike, RenderControllerWithSwap } from "./render.js";
@@ -160,9 +161,7 @@ export function wireMinimal(
     }
   }
 
-  function notifyUnsupported(ctx: ExtensionContext): void {
-    ctx.ui.notify("GBA: this terminal does not support Kitty graphics — extension disabled", "warning");
-  }
+  const notifyUnsupported = createUnsupportedNotifier();
 
   let activeRender: RenderControllerWithSwap | undefined;
 

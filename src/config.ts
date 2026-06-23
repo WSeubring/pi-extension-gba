@@ -1,6 +1,7 @@
 import fsPromises from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { expandHome } from "./paths.js";
 
 // Env vars:
 //   PI_GBA_AUTO_FOCUS=0  — disable auto-focus (L7). Default: enabled.
@@ -44,16 +45,6 @@ function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
 }
 
-function expandTilde(p: string): string {
-  // Only `~` exactly or a `~/` prefix refer to $HOME; `~user/...` names
-  // another user's home and must be left untouched.
-  if (p === "~") return homedir();
-  if (p.startsWith("~/")) {
-    return path.join(homedir(), p.slice(2));
-  }
-  return p;
-}
-
 // ---- Path -------------------------------------------------------------------
 
 /** Returns the path to the GBA config file: ~/.config/pi/gba.json */
@@ -80,7 +71,7 @@ export function normalize(input: Partial<GbaConfig>): GbaConfig {
   );
 
   const rawRomDir = typeof input.romDir === "string" ? input.romDir : DEFAULTS.romDir;
-  const romDir = expandTilde(rawRomDir);
+  const romDir = expandHome(rawRomDir);
 
   return {
     version: 1,

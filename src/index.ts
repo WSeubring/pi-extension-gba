@@ -8,6 +8,7 @@ import { resolveConfig } from "./config.js";
 import { createEmulator } from "./emulator.js";
 import type { RenderController } from "./lifecycle.js";
 import { createLifecycle } from "./lifecycle.js";
+import { createUnsupportedNotifier, requireAudio, toggleMute } from "./messages.js";
 import activateMinimal from "./minimal-activate.js";
 import { createPersistence } from "./persistence.js";
 import type { RenderController as PhaseRenderController, RenderControllerWithSwap } from "./render.js";
@@ -34,7 +35,7 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
   const persistence = createPersistence(emulator, { romDir: cfg.romDir, autoSnapshotMs: 30_000 });
 
   let render: RenderControllerWithSwap | undefined;
-  let unsupportedNotified = false;
+  const notifyUnsupported = createUnsupportedNotifier();
 
   // Cache most-recent ctx for audio crash notifications (crash fires async).
   let lastCtx: ExtensionContext | undefined;
@@ -60,12 +61,6 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
   // Live audio gate: re-evaluated on every access so /gba config changes
   // apply immediately. Undefined = silent (disabled or no backend tool).
   const getAudio = (): AudioPlayer | undefined => (audioEnabled(cfg.audio) ? audioPlayer : undefined);
-
-  function notifyUnsupported(ctx: ExtensionContext): void {
-    if (unsupportedNotified) return;
-    unsupportedNotified = true;
-    ctx.ui.notify("GBA: this terminal does not support Kitty graphics — extension disabled", "warning");
-  }
 
   const NOOP_RENDER: RenderController = {
     start() {},
@@ -158,18 +153,9 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
     description: "Toggle GBA audio mute",
     handler: (ctx: ExtensionContext) => {
       lastCtx = ctx;
-      const audio = getAudio();
-      if (!audio) {
-        ctx.ui.notify("GBA: audio not enabled — set PI_GBA_AUDIO=1 or enable via /gba config", "warning");
-        return;
-      }
-      if (audio.isMuted()) {
-        audio.unmute();
-        ctx.ui.notify("GBA: audio unmuted", "info");
-      } else {
-        audio.mute();
-        ctx.ui.notify("GBA: audio muted", "info");
-      }
+      const audio = requireAudio(ctx, getAudio());
+      if (!audio) return;
+      toggleMute(ctx, audio);
     },
   });
 

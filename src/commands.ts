@@ -13,6 +13,7 @@ import {
 import type { Emulator } from "./emulator.js";
 import { RomLoadError } from "./emulator.js";
 import type { Lifecycle, RenderController } from "./lifecycle.js";
+import { MSG, requireAudio } from "./messages.js";
 import type { Persistence } from "./persistence.js";
 import { showRomPicker } from "./picker.js";
 
@@ -357,19 +358,15 @@ export function registerAll(pi: ExtensionAPI, deps: CommandDeps): void {
         } else if (token === "reset") {
           await cmdReset(ctx, deps);
         } else if (token === "mute") {
-          if (!deps.audio) {
-            ctx.ui.notify("GBA: audio not enabled — set PI_GBA_AUDIO=1 or enable via /gba config", "warning");
-            return;
-          }
-          deps.audio.mute();
-          ctx.ui.notify("GBA: audio muted", "info");
+          const audio = requireAudio(ctx, deps.audio);
+          if (!audio) return;
+          audio.mute();
+          ctx.ui.notify(MSG.audioMuted, "info");
         } else if (token === "unmute") {
-          if (!deps.audio) {
-            ctx.ui.notify("GBA: audio not enabled — set PI_GBA_AUDIO=1 or enable via /gba config", "warning");
-            return;
-          }
-          deps.audio.unmute();
-          ctx.ui.notify("GBA: audio unmuted", "info");
+          const audio = requireAudio(ctx, deps.audio);
+          if (!audio) return;
+          audio.unmute();
+          ctx.ui.notify(MSG.audioUnmuted, "info");
         } else if (token === "config") {
           if (subToken === "reset") {
             const prevRomDir = deps.cfg.romDir;
