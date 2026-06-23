@@ -1,18 +1,10 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import fsPromises from "node:fs/promises";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
+import { test } from "node:test";
 
-import {
-  loadConfigFile,
-  saveConfigFile,
-  resetConfigFile,
-  getConfigPath,
-  normalize,
-  popQueuedWarning,
-} from "../src/config.js";
+import { loadConfigFile, normalize, popQueuedWarning, resetConfigFile, saveConfigFile } from "../src/config.js";
 
 // ---- helpers ----------------------------------------------------------------
 
@@ -20,17 +12,15 @@ import {
  * Redirects getConfigPath() by injecting a temp dir.
  * We test using real FS in a temp directory.
  */
-async function withTempConfig<T>(
-  fn: (configPath: string) => Promise<T>,
-): Promise<T> {
+async function withTempConfig<T>(fn: (configPath: string) => Promise<T>): Promise<T> {
   const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "pi-gba-test-"));
-  const configPath = path.join(dir, "gba.json");
+  const _configPath = path.join(dir, "gba.json");
 
   // Monkey-patch HOME so getConfigPath() resolves to our temp dir
-  const origHome = process.env["HOME"];
-  const origUserProfile = process.env["USERPROFILE"];
-  process.env["HOME"] = dir;
-  process.env["USERPROFILE"] = dir;
+  const origHome = process.env.HOME;
+  const origUserProfile = process.env.USERPROFILE;
+  process.env.HOME = dir;
+  process.env.USERPROFILE = dir;
 
   // We also need to create the nested .config/pi/ directory structure
   // that getConfigPath() expects at ~/.config/pi/gba.json
@@ -41,8 +31,8 @@ async function withTempConfig<T>(
   try {
     return await fn(nestedConfigPath);
   } finally {
-    process.env["HOME"] = origHome;
-    process.env["USERPROFILE"] = origUserProfile;
+    process.env.HOME = origHome;
+    process.env.USERPROFILE = origUserProfile;
     await fsPromises.rm(dir, { recursive: true, force: true });
     // Clear any queued warnings left over from the test
     popQueuedWarning();
@@ -178,8 +168,11 @@ test("corrupt-file fallback: JSON parse error → empty + .bak created", async (
     const result = await loadConfigFile();
     assert.deepEqual(result, {}, "corrupt file should fall through to {}");
 
-    const bakPath = configPath + ".bak";
-    const bakExists = await fsPromises.access(bakPath).then(() => true).catch(() => false);
+    const bakPath = `${configPath}.bak`;
+    const bakExists = await fsPromises
+      .access(bakPath)
+      .then(() => true)
+      .catch(() => false);
     assert.ok(bakExists, ".bak file should be created");
 
     const bakContent = await fsPromises.readFile(bakPath, "utf8");
@@ -187,24 +180,23 @@ test("corrupt-file fallback: JSON parse error → empty + .bak created", async (
 
     const warning = popQueuedWarning();
     assert.ok(warning !== undefined, "a warning should be queued");
-    assert.ok(warning!.includes("corrupt"), "warning should mention corrupt");
-    assert.ok(warning!.includes("gba.json.bak"), "warning should mention backup file");
+    assert.ok(warning?.includes("corrupt"), "warning should mention corrupt");
+    assert.ok(warning?.includes("gba.json.bak"), "warning should mention backup file");
   });
 });
 
 test("unknown version fallback: version 99 → empty + .bak created", async () => {
   await withTempConfig(async (configPath) => {
-    await fsPromises.writeFile(
-      configPath,
-      JSON.stringify({ version: 99, scale: 2 }),
-      "utf8",
-    );
+    await fsPromises.writeFile(configPath, JSON.stringify({ version: 99, scale: 2 }), "utf8");
 
     const result = await loadConfigFile();
     assert.deepEqual(result, {}, "unknown version should fall through to {}");
 
-    const bakPath = configPath + ".bak";
-    const bakExists = await fsPromises.access(bakPath).then(() => true).catch(() => false);
+    const bakPath = `${configPath}.bak`;
+    const bakExists = await fsPromises
+      .access(bakPath)
+      .then(() => true)
+      .catch(() => false);
     assert.ok(bakExists, ".bak file should be created for unknown version");
 
     const warning = popQueuedWarning();

@@ -1,11 +1,10 @@
-import { performance } from "node:perf_hooks";
 import { mkdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join as joinPath } from "node:path";
+import { performance } from "node:perf_hooks";
+import type { ExtensionContext, WidgetPlacement } from "@mariozechner/pi-coding-agent";
+import { allocateImageId, deleteKittyImage, Image } from "@mariozechner/pi-tui";
 import { encode as encodePng } from "fast-png";
-import { Image, allocateImageId, deleteKittyImage } from "@mariozechner/pi-tui";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { WidgetPlacement } from "@mariozechner/pi-coding-agent";
 import type { AudioPlayer } from "./audio.js";
 
 const GBA_W = 240;
@@ -270,14 +269,14 @@ class CustomRenderBackend implements RenderBackend {
   private dumpSeq = 0;
 
   constructor() {
-    const dir = process.env["PI_GBA_FRAME_DUMP"];
+    const dir = process.env.PI_GBA_FRAME_DUMP;
     let dumpDir: string | undefined;
     if (dir && dir.length > 0) {
       try {
         mkdirSync(dir, { recursive: true });
         dumpDir = dir;
       } catch (e) {
-        if (process.env["PI_GBA_AUDIO_TRACE"] === "1") {
+        if (process.env.PI_GBA_AUDIO_TRACE === "1") {
           process.stderr.write(
             `[pi-extension-gba] frame-dump disabled: mkdir ${dir} failed: ${(e as Error).message}\n`,
           );
@@ -285,7 +284,7 @@ class CustomRenderBackend implements RenderBackend {
       }
     }
     this.dumpDir = dumpDir;
-    const everyRaw = Number.parseInt(process.env["PI_GBA_FRAME_DUMP_EVERY"] ?? "", 10);
+    const everyRaw = Number.parseInt(process.env.PI_GBA_FRAME_DUMP_EVERY ?? "", 10);
     this.dumpEvery = Number.isFinite(everyRaw) && everyRaw > 0 ? everyRaw : 30;
   }
 
@@ -335,7 +334,11 @@ class CustomRenderBackend implements RenderBackend {
 // Upscaling helpers
 // ---------------------------------------------------------------------------
 
-function makeUpscaler(scale: 1 | 2 | 3, outW: number, outH: number): {
+function makeUpscaler(
+  scale: 1 | 2 | 3,
+  outW: number,
+  outH: number,
+): {
   upscale(rgba: Uint8Array): Uint8Array;
 } {
   const scratch = scale > 1 ? new Uint8Array(outW * outH * 4) : new Uint8Array(0);
@@ -355,10 +358,22 @@ function makeUpscaler(scale: 1 | 2 | 3, outW: number, outH: number): {
         const di01 = di00 + 4;
         const di10 = ((dy0 + 1) * outW + dx0) * 4;
         const di11 = di10 + 4;
-        scratch[di00] = r; scratch[di00 + 1] = g; scratch[di00 + 2] = b; scratch[di00 + 3] = 0xff;
-        scratch[di01] = r; scratch[di01 + 1] = g; scratch[di01 + 2] = b; scratch[di01 + 3] = 0xff;
-        scratch[di10] = r; scratch[di10 + 1] = g; scratch[di10 + 2] = b; scratch[di10 + 3] = 0xff;
-        scratch[di11] = r; scratch[di11 + 1] = g; scratch[di11 + 2] = b; scratch[di11 + 3] = 0xff;
+        scratch[di00] = r;
+        scratch[di00 + 1] = g;
+        scratch[di00 + 2] = b;
+        scratch[di00 + 3] = 0xff;
+        scratch[di01] = r;
+        scratch[di01 + 1] = g;
+        scratch[di01 + 2] = b;
+        scratch[di01 + 3] = 0xff;
+        scratch[di10] = r;
+        scratch[di10 + 1] = g;
+        scratch[di10 + 2] = b;
+        scratch[di10 + 3] = 0xff;
+        scratch[di11] = r;
+        scratch[di11 + 1] = g;
+        scratch[di11 + 2] = b;
+        scratch[di11 + 3] = 0xff;
       }
     }
     return scratch;
@@ -374,7 +389,10 @@ function makeUpscaler(scale: 1 | 2 | 3, outW: number, outH: number): {
         for (let dy = 0; dy < 3; dy++) {
           for (let dx = 0; dx < 3; dx++) {
             const di = ((sy * 3 + dy) * outW + (sx * 3 + dx)) * 4;
-            scratch[di] = r; scratch[di + 1] = g; scratch[di + 2] = b; scratch[di + 3] = 0xff;
+            scratch[di] = r;
+            scratch[di + 1] = g;
+            scratch[di + 2] = b;
+            scratch[di + 3] = 0xff;
           }
         }
       }
@@ -418,18 +436,14 @@ export function createRenderer(
     throw new RenderInitError("frameRate must be between 1 and 30");
   }
   if (placement !== "aboveEditor" && placement !== "belowEditor") {
-    throw new RenderInitError(
-      'placement must be "aboveEditor" or "belowEditor"',
-    );
+    throw new RenderInitError('placement must be "aboveEditor" or "belowEditor"');
   }
 
   const outW = GBA_W * scale;
   const outH = GBA_H * scale;
   const { upscale } = makeUpscaler(scale, outW, outH);
 
-  const errorListeners = new Set<
-    (err: RenderTickError | RenderInitError) => void
-  >();
+  const errorListeners = new Set<(err: RenderTickError | RenderInitError) => void>();
 
   let interval: ReturnType<typeof setInterval> | undefined;
 
@@ -485,7 +499,7 @@ export function createRenderer(
   // samples pulled per tick, and stdin writableLength at emission time.
   // Traces go to stderr; pi's TUI is expected to surface them inline in Ghostty
   // (the same path lifecycle diagnostics use; see lifecycle.ts:56 note).
-  const audioTraceEnabled = process.env["PI_GBA_AUDIO_TRACE"] === "1";
+  const audioTraceEnabled = process.env.PI_GBA_AUDIO_TRACE === "1";
   let lastTickAt = 0;
 
   function tick(): void {
@@ -509,9 +523,7 @@ export function createRenderer(
         }
         if (audioTraceEnabled) {
           const probe = audio as unknown as { __probeWritableLength?: () => number | undefined };
-          writableLen = typeof probe.__probeWritableLength === "function"
-            ? probe.__probeWritableLength()
-            : undefined;
+          writableLen = typeof probe.__probeWritableLength === "function" ? probe.__probeWritableLength() : undefined;
         }
       }
       const rgba = emulator.getFramebuffer();
@@ -519,7 +531,7 @@ export function createRenderer(
       backend.pushFrame(encodeForBackend(scaled));
       if (audioTraceEnabled) {
         const now = tickStart;
-        const dt = lastTickAt === 0 ? 0 : (now - lastTickAt);
+        const dt = lastTickAt === 0 ? 0 : now - lastTickAt;
         lastTickAt = now;
         const duration = performance.now() - tickStart;
         process.stderr.write(

@@ -6,8 +6,9 @@
  * put/get/delete on the object store. A store without them guarantees err →
  * wasm runtime abort. These tests pin the stub's success-path contract.
  */
-import { test } from "node:test";
+
 import assert from "node:assert/strict";
+import { test } from "node:test";
 
 import { installWasmShims } from "../src/wasm-shims.js";
 
@@ -32,7 +33,7 @@ interface FakeTransaction {
 /** Open the stubbed DB and hand back a readwrite transaction + store. */
 async function openStoreViaStub(): Promise<{ txn: FakeTransaction; store: FakeStore }> {
   installWasmShims();
-  const idb = (globalThis as Record<string, unknown>)["indexedDB"] as {
+  const idb = (globalThis as Record<string, unknown>).indexedDB as {
     open(name: string): FakeRequest;
   };
   assert.ok(idb, "indexedDB stub must be installed");
@@ -42,10 +43,7 @@ async function openStoreViaStub(): Promise<{ txn: FakeTransaction; store: FakeSt
     openReq.onsuccess = () => resolve(openReq.result as Record<string, unknown>);
   });
 
-  const txn = (db["transaction"] as (n: string[], m?: string) => FakeTransaction)(
-    ["FILE_DATA"],
-    "readwrite",
-  );
+  const txn = (db.transaction as (n: string[], m?: string) => FakeTransaction)(["FILE_DATA"], "readwrite");
   return { txn, store: txn.objectStore("FILE_DATA") };
 }
 

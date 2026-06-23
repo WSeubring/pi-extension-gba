@@ -1,12 +1,12 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-
-import { registerAll } from "../src/commands.js";
-import type { CommandDeps } from "../src/commands.js";
-import type { Persistence } from "../src/persistence.js";
-import type { Lifecycle, RenderController } from "../src/lifecycle.js";
-import type { GbaCapabilities } from "../src/capabilities.js";
+import { test } from "node:test";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { GbaCapabilities } from "../src/capabilities.js";
+import type { CommandDeps } from "../src/commands.js";
+import { registerAll } from "../src/commands.js";
+import type { Lifecycle, RenderController } from "../src/lifecycle.js";
+import type { Persistence } from "../src/persistence.js";
+import { defined } from "./harness/assert.js";
 
 // ---- mock factories ----
 
@@ -48,7 +48,9 @@ function makeFakePersistence(overrides?: Partial<Persistence>): Persistence & {
 
   return {
     loadRomCalls,
-    get clearStateCalls() { return clearStateCalls; },
+    get clearStateCalls() {
+      return clearStateCalls;
+    },
     async loadRom(basename: string) {
       loadRomCalls.push(basename);
       currentBasename = basename;
@@ -56,10 +58,18 @@ function makeFakePersistence(overrides?: Partial<Persistence>): Persistence & {
     },
     async snapshot() {},
     async flushPending() {},
-    async listRoms() { return []; },
-    async lastPlayed() { return undefined; },
-    currentRom() { return currentBasename; },
-    async clearState() { clearStateCalls++; },
+    async listRoms() {
+      return [];
+    },
+    async lastPlayed() {
+      return undefined;
+    },
+    currentRom() {
+      return currentBasename;
+    },
+    async clearState() {
+      clearStateCalls++;
+    },
     destroy() {},
     ...overrides,
   } as unknown as Persistence & { loadRomCalls: string[]; clearStateCalls: number };
@@ -68,13 +78,21 @@ function makeFakePersistence(overrides?: Partial<Persistence>): Persistence & {
 function makeFakeLifecycle(isCrashedResult: boolean): Lifecycle & { onRomLoadCalls: number } {
   let onRomLoadCalls = 0;
   return {
-    get onRomLoadCalls() { return onRomLoadCalls; },
+    get onRomLoadCalls() {
+      return onRomLoadCalls;
+    },
     attach() {},
     detach() {},
     manualPauseToggle() {},
-    isRunning() { return false; },
-    onRomLoad() { onRomLoadCalls++; },
-    isCrashed() { return isCrashedResult; },
+    isRunning() {
+      return false;
+    },
+    onRomLoad() {
+      onRomLoadCalls++;
+    },
+    isCrashed() {
+      return isCrashedResult;
+    },
     acknowledgeCrash() {},
   } as unknown as Lifecycle & { onRomLoadCalls: number };
 }
@@ -98,7 +116,10 @@ function makeFakePi(): {
   const pi = {
     registerCommand(
       _name: string,
-      opts: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>; getArgumentCompletions?: unknown },
+      opts: {
+        handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+        getArgumentCompletions?: unknown;
+      },
     ) {
       registeredHandler = opts.handler;
     },
@@ -147,22 +168,31 @@ function makeDeps(
       audio: false,
     },
     caps,
-    notifyUnsupported(_ctx: ExtensionContext) { notifyUnsupportedCalls++; },
+    notifyUnsupported(_ctx: ExtensionContext) {
+      notifyUnsupportedCalls++;
+    },
     audio: undefined,
   };
 
-  return { deps, persistence, lifecycle, get notifyUnsupportedCalls() { return notifyUnsupportedCalls; } };
+  return {
+    deps,
+    persistence,
+    lifecycle,
+    get notifyUnsupportedCalls() {
+      return notifyUnsupportedCalls;
+    },
+  };
 }
 
 // ---- tests ----
 
 test("/gba list when isCrashed → clearState called + picker NOT mounted", async () => {
   const { pi, invokeCommand } = makeFakePi();
-  const { deps, persistence } = makeDeps(
-    { kittyGraphics: true, audioBackend: undefined },
-    true,
-    { currentRom() { return "game.gba"; } },
-  );
+  const { deps, persistence } = makeDeps({ kittyGraphics: true, audioBackend: undefined }, true, {
+    currentRom() {
+      return "game.gba";
+    },
+  });
   const { ctx, wasCustomCalled, notifyCalls } = makeFakeCtx();
 
   registerAll(pi, deps);
@@ -203,9 +233,21 @@ test("/gba notifyUnsupported called on every invocation when !caps.kittyGraphics
     persistence,
     lifecycle,
     ensureRender: () => fakeRender,
-    cfg: { version: 1 as const, romDir: "/roms", scale: 2, frameRate: 30, autoRunOnAgentStart: true, autoHideOnAgentEnd: false, autoFocusOnAgentStart: true, autoFocusDebounceMs: 500, audio: false },
+    cfg: {
+      version: 1 as const,
+      romDir: "/roms",
+      scale: 2,
+      frameRate: 30,
+      autoRunOnAgentStart: true,
+      autoHideOnAgentEnd: false,
+      autoFocusOnAgentStart: true,
+      autoFocusDebounceMs: 500,
+      audio: false,
+    },
     caps: { kittyGraphics: false, audioBackend: undefined },
-    notifyUnsupported(_ctx: ExtensionContext) { notifyUnsupportedCount++; },
+    notifyUnsupported(_ctx: ExtensionContext) {
+      notifyUnsupportedCount++;
+    },
     audio: undefined,
   };
 
@@ -216,16 +258,20 @@ test("/gba notifyUnsupported called on every invocation when !caps.kittyGraphics
   assert.equal(notifyUnsupportedCount, 1, "notifyUnsupported called once on first /gba");
 
   await invokeCommand("", ctx);
-  assert.equal(notifyUnsupportedCount, 2, "notifyUnsupported called again on second /gba (closed-over gate is in index.ts, not commands.ts)");
+  assert.equal(
+    notifyUnsupportedCount,
+    2,
+    "notifyUnsupported called again on second /gba (closed-over gate is in index.ts, not commands.ts)",
+  );
 });
 
 test("/gba reset path when crashed: clearState + loadRom called", async () => {
   const { pi, invokeCommand } = makeFakePi();
-  const { deps, persistence, lifecycle } = makeDeps(
-    { kittyGraphics: true, audioBackend: undefined },
-    true,
-    { currentRom() { return "game.gba"; } },
-  );
+  const { deps, persistence, lifecycle } = makeDeps({ kittyGraphics: true, audioBackend: undefined }, true, {
+    currentRom() {
+      return "game.gba";
+    },
+  });
   const { ctx } = makeFakeCtx();
 
   registerAll(pi, deps);
@@ -235,10 +281,7 @@ test("/gba reset path when crashed: clearState + loadRom called", async () => {
     (persistence as unknown as { clearStateCalls: number }).clearStateCalls >= 1,
     "clearState called during crash recovery reset",
   );
-  assert.ok(
-    persistence.loadRomCalls.includes("game.gba"),
-    "loadRom called with current ROM during crash recovery",
-  );
+  assert.ok(persistence.loadRomCalls.includes("game.gba"), "loadRom called with current ROM during crash recovery");
   assert.equal(lifecycle.onRomLoadCalls, 1, "onRomLoad called once");
 });
 
@@ -253,14 +296,28 @@ test("buildCompletions returns null when !caps.kittyGraphics", async () => {
   } as unknown as ExtensionAPI;
 
   const fakeRender = makeFakeRender();
-  const persistence = makeFakePersistence({ async listRoms() { return ["a.gba"]; } });
+  const persistence = makeFakePersistence({
+    async listRoms() {
+      return ["a.gba"];
+    },
+  });
   const lifecycle = makeFakeLifecycle(false);
   const deps: CommandDeps = {
     emulator: {} as never,
     persistence,
     lifecycle,
     ensureRender: () => fakeRender,
-    cfg: { version: 1 as const, romDir: "/roms", scale: 2, frameRate: 30, autoRunOnAgentStart: true, autoHideOnAgentEnd: false, autoFocusOnAgentStart: true, autoFocusDebounceMs: 500, audio: false },
+    cfg: {
+      version: 1 as const,
+      romDir: "/roms",
+      scale: 2,
+      frameRate: 30,
+      autoRunOnAgentStart: true,
+      autoHideOnAgentEnd: false,
+      autoFocusOnAgentStart: true,
+      autoFocusDebounceMs: 500,
+      audio: false,
+    },
     caps: { kittyGraphics: false, audioBackend: undefined },
     notifyUnsupported() {},
     audio: undefined,
@@ -268,6 +325,9 @@ test("buildCompletions returns null when !caps.kittyGraphics", async () => {
 
   registerAll(pi, deps);
 
-  const result = await registeredGetCompletions!("");
+  const result = await defined<(prefix: string) => Promise<unknown> | unknown>(
+    registeredGetCompletions,
+    "registeredGetCompletions",
+  )("");
   assert.equal(result, null, "completions should be null when kittyGraphics is false");
 });

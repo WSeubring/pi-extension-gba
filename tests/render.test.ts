@@ -1,13 +1,7 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-
-import {
-  createRenderer,
-  RenderInitError,
-  RenderTickError,
-  type EmulatorLike,
-} from "../src/render.js";
+import { test } from "node:test";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { createRenderer, type EmulatorLike, RenderInitError, RenderTickError } from "../src/render.js";
 
 const GBA_W = 240;
 const GBA_H = 160;
@@ -38,27 +32,17 @@ function makeMockCtx(): { ctx: ExtensionContext; calls: SetWidgetCall[] } {
 
 test("createRenderer throws RenderInitError for invalid scale", () => {
   const { ctx } = makeMockCtx();
-  assert.throws(
-    () =>
-      createRenderer(ctx, makeMockEmulator(), { scale: 4 as unknown as 1 }),
-    RenderInitError,
-  );
+  assert.throws(() => createRenderer(ctx, makeMockEmulator(), { scale: 4 as unknown as 1 }), RenderInitError);
 });
 
 test("createRenderer throws RenderInitError for frameRate=0", () => {
   const { ctx } = makeMockCtx();
-  assert.throws(
-    () => createRenderer(ctx, makeMockEmulator(), { frameRate: 0 }),
-    RenderInitError,
-  );
+  assert.throws(() => createRenderer(ctx, makeMockEmulator(), { frameRate: 0 }), RenderInitError);
 });
 
 test("createRenderer throws RenderInitError for frameRate=31", () => {
   const { ctx } = makeMockCtx();
-  assert.throws(
-    () => createRenderer(ctx, makeMockEmulator(), { frameRate: 31 }),
-    RenderInitError,
-  );
+  assert.throws(() => createRenderer(ctx, makeMockEmulator(), { frameRate: 31 }), RenderInitError);
 });
 
 test("tick error is surfaced through onRenderError, not thrown", async () => {
@@ -78,10 +62,7 @@ test("tick error is surfaced through onRenderError, not thrown", async () => {
   renderer.destroy();
 
   assert.ok(errors.length > 0, "expected at least one error via onRenderError");
-  assert.ok(
-    errors[0] instanceof RenderTickError,
-    "error must be a RenderTickError",
-  );
+  assert.ok(errors[0] instanceof RenderTickError, "error must be a RenderTickError");
 });
 
 test("stop() preserves imageId (does not delete Kitty image)", async () => {
@@ -111,25 +92,22 @@ test("destroy() writes deleteKittyImage to stdout and clears imageId", async () 
 
   const written: Buffer[] = [];
   const origWrite = process.stdout.write.bind(process.stdout);
-  (process.stdout as unknown as { write: typeof process.stdout.write }).write =
-    (chunk: unknown, ...args: unknown[]) => {
-      if (Buffer.isBuffer(chunk)) written.push(chunk);
-      else if (typeof chunk === "string") written.push(Buffer.from(chunk));
-      return (origWrite as (...a: unknown[]) => boolean)(chunk, ...args);
-    };
+  (process.stdout as unknown as { write: typeof process.stdout.write }).write = (
+    chunk: unknown,
+    ...args: unknown[]
+  ) => {
+    if (Buffer.isBuffer(chunk)) written.push(chunk);
+    else if (typeof chunk === "string") written.push(Buffer.from(chunk));
+    return (origWrite as (...a: unknown[]) => boolean)(chunk, ...args);
+  };
 
   try {
     renderer.destroy();
   } finally {
-    (process.stdout as unknown as { write: typeof process.stdout.write }).write =
-      origWrite;
+    (process.stdout as unknown as { write: typeof process.stdout.write }).write = origWrite;
   }
 
-  assert.strictEqual(
-    renderer.__testGetImageId(),
-    undefined,
-    "imageId must be undefined after destroy()",
-  );
+  assert.strictEqual(renderer.__testGetImageId(), undefined, "imageId must be undefined after destroy()");
 
   const unmounts = calls.filter((c) => c.key === "gba" && c.content === undefined);
   assert.strictEqual(unmounts.length, 1, "destroy() must unmount the widget exactly once");
@@ -149,8 +127,12 @@ test("#tick calls emulator.step(2) per ADR 0003", async () => {
   const stepCalls: number[] = [];
   const buf = new Uint8Array(GBA_W * GBA_H * 4).fill(128);
   const spyEmulator: EmulatorLike = {
-    step(n: number) { stepCalls.push(n); },
-    getFramebuffer() { return buf.slice(); },
+    step(n: number) {
+      stepCalls.push(n);
+    },
+    getFramebuffer() {
+      return buf.slice();
+    },
   };
 
   const renderer = createRenderer(ctx, spyEmulator, { frameRate: 30 });
@@ -171,8 +153,12 @@ test("shrink() after stop() synchronously flushes a re-laid-out still frame with
   const stepCalls: number[] = [];
   const buf = new Uint8Array(FRAME_BYTES).fill(128);
   const spyEmulator: EmulatorLike = {
-    step(n: number) { stepCalls.push(n); },
-    getFramebuffer() { return buf.slice(); },
+    step(n: number) {
+      stepCalls.push(n);
+    },
+    getFramebuffer() {
+      return buf.slice();
+    },
   };
   const renderer = createRenderer(ctx, spyEmulator, {
     frameRate: 30,
@@ -209,8 +195,7 @@ test("shrink() after stop() synchronously flushes a re-laid-out still frame with
 
   // The most-recent call must carry a factory function (not undefined/null).
   const lastCall = calls[calls.length - 1];
-  assert.strictEqual(typeof lastCall.content, "function",
-    "setWidget content after shrink() must be a widget factory");
+  assert.strictEqual(typeof lastCall.content, "function", "setWidget content after shrink() must be a widget factory");
 
   renderer.destroy();
 });

@@ -1,11 +1,10 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-
-import { createPersistence } from "../src/persistence.js";
+import { test } from "node:test";
 import type { Emulator } from "../src/emulator.js";
+import { createPersistence } from "../src/persistence.js";
 
 type FakeEmulatorControls = {
   emulator: Emulator;
@@ -69,9 +68,7 @@ function makeFakeEmulator(): FakeEmulatorControls {
   };
 }
 
-async function withTempDir(
-  fn: (dir: string) => Promise<void>,
-): Promise<void> {
+async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(path.join(tmpdir(), "gba-"));
   try {
     await fn(dir);
@@ -158,11 +155,7 @@ test("SRAM debounce: burst of 5 dirties within 80 ms coalesces to one .sav write
     // flushPending is idempotent; no additional writes when nothing is queued.
     await persistence.flushPending();
     const mtimeAfterIdempotent = (await stat(savPath)).mtimeMs;
-    assert.equal(
-      mtimeAfterIdempotent,
-      mtimeAfterFlush,
-      "second flushPending produces no additional write",
-    );
+    assert.equal(mtimeAfterIdempotent, mtimeAfterFlush, "second flushPending produces no additional write");
 
     persistence.destroy();
   });
@@ -388,7 +381,7 @@ test("same-ROM reload: pending SRAM flush lands before the .sav is re-read", asy
     assert.deepEqual(Array.from(savOnDisk), [7, 7], "pending flush forced to disk before reload");
     const seeded = fake.writeSramCalls.at(-1);
     assert.ok(seeded, ".sav was re-read and injected on reload");
-    assert.deepEqual(Array.from(seeded!), [7, 7], "core seeded with the flushed (not stale) bytes");
+    assert.deepEqual(Array.from(seeded), [7, 7], "core seeded with the flushed (not stale) bytes");
 
     persistence.destroy();
   });

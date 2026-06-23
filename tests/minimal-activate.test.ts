@@ -1,3 +1,4 @@
+import { defined } from "./harness/assert.js";
 /**
  * Tests for PI_GBA_MINIMAL=1 activation path (src/minimal-activate.ts).
  *
@@ -9,17 +10,16 @@
  * dispose behaviour, and exit keys.
  */
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
-
-import { wireMinimal, InputOverlayComponent } from "../src/minimal-activate.js";
-import { createMockPi } from "./harness/mock-pi.js";
-import { createMockCtx } from "./harness/mock-ctx.js";
+import { test } from "node:test";
 import type { GbaConfig } from "../src/config.js";
 import type { Emulator } from "../src/emulator.js";
+import { InputOverlayComponent, wireMinimal } from "../src/minimal-activate.js";
 import type { Persistence } from "../src/persistence.js";
 import type { RenderControllerWithSwap } from "../src/render.js";
 import type { ButtonSink, GbaButton } from "../src/types.js";
+import { createMockCtx } from "./harness/mock-ctx.js";
+import { createMockPi } from "./harness/mock-pi.js";
 
 // ---------------------------------------------------------------------------
 // Minimal stubs — only what wireMinimal + registerAll touch.
@@ -29,20 +29,31 @@ function makeEmulator(): Emulator & { destroyed: number } {
   let destroyed = 0;
   const emu = {
     step(_n: number) {},
-    getFramebuffer() { return new Uint8Array(240 * 160 * 4); },
+    getFramebuffer() {
+      return new Uint8Array(240 * 160 * 4);
+    },
     press(_b: string) {},
     release(_b: string) {},
     onCrash(_h: (err: Error) => void) {},
-    destroy() { destroyed++; },
+    destroy() {
+      destroyed++;
+    },
     loadRom(_b: Uint8Array) {},
-    saveState(): Uint8Array { return new Uint8Array(0); },
+    saveState(): Uint8Array {
+      return new Uint8Array(0);
+    },
     loadState(_b: Uint8Array) {},
-    get destroyed() { return destroyed; },
+    get destroyed() {
+      return destroyed;
+    },
   };
   return emu as unknown as Emulator & { destroyed: number };
 }
 
-function makePersistence(roms: string[], lastPlayed?: string): Persistence & {
+function makePersistence(
+  roms: string[],
+  lastPlayed?: string,
+): Persistence & {
   destroyCount: number;
   flushPendingCount: number;
   snapshotCount: number;
@@ -56,16 +67,34 @@ function makePersistence(roms: string[], lastPlayed?: string): Persistence & {
       current = basename;
       return { romPath: `/roms/${basename}`, restoredState: false };
     },
-    async snapshot() { snapshotCount++; },
-    async flushPending() { flushPendingCount++; },
-    async listRoms() { return roms; },
-    async lastPlayed() { return lastPlayed; },
-    currentRom() { return current; },
+    async snapshot() {
+      snapshotCount++;
+    },
+    async flushPending() {
+      flushPendingCount++;
+    },
+    async listRoms() {
+      return roms;
+    },
+    async lastPlayed() {
+      return lastPlayed;
+    },
+    currentRom() {
+      return current;
+    },
     async clearState() {},
-    destroy() { destroyCount++; },
-    get destroyCount() { return destroyCount; },
-    get flushPendingCount() { return flushPendingCount; },
-    get snapshotCount() { return snapshotCount; },
+    destroy() {
+      destroyCount++;
+    },
+    get destroyCount() {
+      return destroyCount;
+    },
+    get flushPendingCount() {
+      return flushPendingCount;
+    },
+    get snapshotCount() {
+      return snapshotCount;
+    },
   };
   return p as unknown as Persistence & {
     destroyCount: number;
@@ -91,17 +120,37 @@ function makeConfig(): GbaConfig {
 function makeFakeRenderer(): { controller: RenderControllerWithSwap; calls: string[] } {
   const calls: string[] = [];
   const controller = {
-    start() { calls.push("start"); },
-    stop() { calls.push("stop"); },
-    shrink() { calls.push("shrink"); },
-    expand() { calls.push("expand"); },
-    hide() { calls.push("hide"); },
-    destroy() { calls.push("destroy"); },
-    onRenderError() { return () => {}; },
-    __testGetImageId() { return undefined; },
+    start() {
+      calls.push("start");
+    },
+    stop() {
+      calls.push("stop");
+    },
+    shrink() {
+      calls.push("shrink");
+    },
+    expand() {
+      calls.push("expand");
+    },
+    hide() {
+      calls.push("hide");
+    },
+    destroy() {
+      calls.push("destroy");
+    },
+    onRenderError() {
+      return () => {};
+    },
+    __testGetImageId() {
+      return undefined;
+    },
     useBackend(_k: "widget" | "custom") {},
-    activeBackend(): "widget" | "custom" { return "custom"; },
-    setCustomComponent(_c: unknown) { calls.push("setCustomComponent"); },
+    activeBackend(): "widget" | "custom" {
+      return "custom";
+    },
+    setCustomComponent(_c: unknown) {
+      calls.push("setCustomComponent");
+    },
     showStillFrame() {},
     setWidgetLiveTick(_e: boolean) {},
   } as RenderControllerWithSwap;
@@ -117,8 +166,12 @@ function makeMockSink(): {
   const pressed: GbaButton[] = [];
   const released: GbaButton[] = [];
   const sink: ButtonSink = {
-    press(button) { pressed.push(button); },
-    release(button) { released.push(button); },
+    press(button) {
+      pressed.push(button);
+    },
+    release(button) {
+      released.push(button);
+    },
   };
   return { sink, pressed, released };
 }
@@ -150,8 +203,14 @@ test("minimal mode: /gba <rom> starts widget renderer, shutdown cleans up", asyn
     },
   );
 
-  assert.ok(mockPi.commands.find((c) => c.name === "gba"), "/gba command registered");
-  assert.ok(mockPi.events.some((e) => e.event === "session_shutdown"), "session_shutdown registered");
+  assert.ok(
+    mockPi.commands.find((c) => c.name === "gba"),
+    "/gba command registered",
+  );
+  assert.ok(
+    mockPi.events.some((e) => e.event === "session_shutdown"),
+    "session_shutdown registered",
+  );
 
   await mockPi.invokeCommand("gba", "pokemon", mockCtx.ctx);
 
@@ -181,11 +240,7 @@ test("minimal mode: shutdown survives snapshot failure, still flushes + destroys
   };
   const cfg = makeConfig();
 
-  wireMinimal(
-    mockPi.pi,
-    { emulator, persistence, cfg, caps: { kittyGraphics: true, audioBackend: undefined } },
-    {},
-  );
+  wireMinimal(mockPi.pi, { emulator, persistence, cfg, caps: { kittyGraphics: true, audioBackend: undefined } }, {});
 
   await mockPi.emit("session_shutdown", { type: "session_shutdown" }, mockCtx.ctx);
 
@@ -230,8 +285,8 @@ test("minimal mode: re-invoking /gba disposes prior renderer", async () => {
   await mockPi.invokeCommand("gba", "", mockCtx.ctx);
 
   assert.equal(handles.length, 2, "two renderers created across two /gba invocations");
-  assert.ok(handles[0]!.calls.includes("destroy"), "first renderer destroyed before second starts");
-  assert.ok(handles[1]!.calls.includes("start"), "second renderer started");
+  assert.ok(handles[0]?.calls.includes("destroy"), "first renderer destroyed before second starts");
+  assert.ok(handles[1]?.calls.includes("start"), "second renderer started");
 
   const altM = mockPi.shortcuts.find((s) => s.keyId === "alt+m");
   assert.equal(altM, undefined, "alt+m shortcut NOT registered in minimal mode");
@@ -240,10 +295,7 @@ test("minimal mode: re-invoking /gba disposes prior renderer", async () => {
   const altG = mockPi.shortcuts.find((s) => s.keyId === "alt+g");
   assert.ok(altG, "alt+g shortcut registered for input overlay");
   assert.equal(typeof altG.handler, "function", "alt+g handler is a function");
-  assert.ok(
-    altG.description?.includes("GBA"),
-    "alt+g description mentions GBA",
-  );
+  assert.ok(altG.description?.includes("GBA"), "alt+g description mentions GBA");
 });
 
 // ---------------------------------------------------------------------------
@@ -258,11 +310,7 @@ test("overlay handler: no-ops when no ROM loaded, notifies user", async () => {
   const persistence = makePersistence([]);
   const cfg = makeConfig();
 
-  wireMinimal(
-    mockPi.pi,
-    { emulator, persistence, cfg, caps: { kittyGraphics: true, audioBackend: undefined } },
-    {},
-  );
+  wireMinimal(mockPi.pi, { emulator, persistence, cfg, caps: { kittyGraphics: true, audioBackend: undefined } }, {});
 
   // Do NOT invoke /gba — activeRender stays undefined.
   await mockPi.pressShortcut("alt+g", mockCtx.ctx);
@@ -290,8 +338,7 @@ test("overlay handler: invokes ctx.ui.custom with overlay:true when ROM loaded",
     { emulator, persistence, cfg, caps: { kittyGraphics: true, audioBackend: undefined } },
     {
       createRenderer: ((_ctx: unknown, _emu: unknown, _opts: unknown) =>
-        rendererHandle.controller
-      ) as unknown as typeof import("../src/render.js").createRenderer,
+        rendererHandle.controller) as unknown as typeof import("../src/render.js").createRenderer,
     },
   );
 
@@ -305,7 +352,7 @@ test("overlay handler: invokes ctx.ui.custom with overlay:true when ROM loaded",
   await Promise.resolve();
 
   assert.equal(mockCtx.customCalls.length, 1, "ctx.ui.custom called once");
-  const call = mockCtx.customCalls[0]!;
+  const call = defined(mockCtx.customCalls[0], "first custom call");
   assert.ok(call.options, "custom called with options");
   const opts = call.options as { overlay?: boolean; overlayOptions?: unknown };
   assert.equal(opts.overlay, true, "overlay: true passed");
@@ -320,7 +367,9 @@ test("overlay handler: invokes ctx.ui.custom with overlay:true when ROM loaded",
 test("InputOverlayComponent: handleInput('z') → sink.press('a')", () => {
   const { sink, pressed } = makeMockSink();
   let doneCalled = 0;
-  const comp = new InputOverlayComponent(sink, () => { doneCalled++; });
+  const comp = new InputOverlayComponent(sink, () => {
+    doneCalled++;
+  });
 
   comp.handleInput("z");
 
@@ -362,7 +411,9 @@ test("InputOverlayComponent: dispose() releases all held buttons", () => {
 test("InputOverlayComponent: ctrl+c (raw \\x03) calls done", () => {
   const { sink } = makeMockSink();
   let doneCalled = 0;
-  const comp = new InputOverlayComponent(sink, () => { doneCalled++; });
+  const comp = new InputOverlayComponent(sink, () => {
+    doneCalled++;
+  });
 
   comp.handleInput("\x03");
 
@@ -374,7 +425,9 @@ test("InputOverlayComponent: ctrl+c (raw \\x03) calls done", () => {
 test("InputOverlayComponent: escape (raw \\x1b) calls done", () => {
   const { sink } = makeMockSink();
   let doneCalled = 0;
-  const comp = new InputOverlayComponent(sink, () => { doneCalled++; });
+  const comp = new InputOverlayComponent(sink, () => {
+    doneCalled++;
+  });
 
   comp.handleInput("\x1b");
 
@@ -386,7 +439,9 @@ test("InputOverlayComponent: escape (raw \\x1b) calls done", () => {
 test("InputOverlayComponent: 'q' calls done", () => {
   const { sink } = makeMockSink();
   let doneCalled = 0;
-  const comp = new InputOverlayComponent(sink, () => { doneCalled++; });
+  const comp = new InputOverlayComponent(sink, () => {
+    doneCalled++;
+  });
 
   comp.handleInput("q");
 
@@ -399,7 +454,9 @@ test("InputOverlayComponent: 'q' calls done", () => {
 test("InputOverlayComponent: alt+g (\\x1bg) calls done", () => {
   const { sink } = makeMockSink();
   let doneCalled = 0;
-  const comp = new InputOverlayComponent(sink, () => { doneCalled++; });
+  const comp = new InputOverlayComponent(sink, () => {
+    doneCalled++;
+  });
 
   comp.handleInput("\x1bg");
 
@@ -433,8 +490,7 @@ test("overlayActive guard: second alt+g does not open a second overlay", async (
     { emulator, persistence, cfg, caps: { kittyGraphics: true, audioBackend: undefined } },
     {
       createRenderer: ((_ctx: unknown, _emu: unknown, _opts: unknown) =>
-        rendererHandle.controller
-      ) as unknown as typeof import("../src/render.js").createRenderer,
+        rendererHandle.controller) as unknown as typeof import("../src/render.js").createRenderer,
     },
   );
 
@@ -448,16 +504,12 @@ test("overlayActive guard: second alt+g does not open a second overlay", async (
   await Promise.resolve();
   await Promise.resolve();
 
-  assert.equal(
-    mockCtx.customCalls.length,
-    1,
-    "ctx.ui.custom called only once despite two alt+g presses",
-  );
+  assert.equal(mockCtx.customCalls.length, 1, "ctx.ui.custom called only once despite two alt+g presses");
 
   // Resolve the first overlay by sending an exit key to the component.
   // The component's handleInput("q") calls done() which resolves ctx.ui.custom
   // and triggers the finally block that resets overlayActive.
-  const firstCall = mockCtx.customCalls[0]!;
+  const firstCall = defined(mockCtx.customCalls[0], "first custom call");
   const comp = firstCall.component as { handleInput(data: string): void } | undefined;
   comp?.handleInput("q");
 
@@ -468,11 +520,7 @@ test("overlayActive guard: second alt+g does not open a second overlay", async (
   void mockPi.pressShortcut("alt+g", mockCtx.ctx);
   await Promise.resolve();
 
-  assert.equal(
-    mockCtx.customCalls.length,
-    2,
-    "after first overlay resolves, alt+g opens a new overlay",
-  );
+  assert.equal(mockCtx.customCalls.length, 2, "after first overlay resolves, alt+g opens a new overlay");
 });
 
 // B3: ctx.ui.custom throwing should call ctx.ui.notify with error message.
@@ -489,8 +537,12 @@ test("overlay handler: ctx.ui.custom rejection notifies user with error", async 
   // Create an ExtensionCommandContext-like mock with a throwing custom.
   const throwingCtx = {
     ui: {
-      notify(message: string, type?: string) { notifyCalls.push({ message, type }); },
-      async custom(): Promise<never> { throw new Error("overlay exploded"); },
+      notify(message: string, type?: string) {
+        notifyCalls.push({ message, type });
+      },
+      async custom(): Promise<never> {
+        throw new Error("overlay exploded");
+      },
       setWidget() {},
     },
     hasUI: true,
@@ -498,19 +550,35 @@ test("overlay handler: ctx.ui.custom rejection notifies user with error", async 
     sessionManager: {},
     modelRegistry: {},
     model: undefined,
-    isIdle() { return true; },
+    isIdle() {
+      return true;
+    },
     signal: undefined,
     abort() {},
-    hasPendingMessages() { return false; },
+    hasPendingMessages() {
+      return false;
+    },
     shutdown() {},
-    getContextUsage() { return undefined; },
+    getContextUsage() {
+      return undefined;
+    },
     compact() {},
-    getSystemPrompt() { return ""; },
+    getSystemPrompt() {
+      return "";
+    },
     async waitForIdle() {},
-    async newSession() { return { cancelled: false }; },
-    async fork() { return { cancelled: false }; },
-    async navigateTree() { return { cancelled: false }; },
-    async switchSession() { return { cancelled: false }; },
+    async newSession() {
+      return { cancelled: false };
+    },
+    async fork() {
+      return { cancelled: false };
+    },
+    async navigateTree() {
+      return { cancelled: false };
+    },
+    async switchSession() {
+      return { cancelled: false };
+    },
     async reload() {},
   } as unknown as import("@mariozechner/pi-coding-agent").ExtensionCommandContext;
 
@@ -519,8 +587,7 @@ test("overlay handler: ctx.ui.custom rejection notifies user with error", async 
     { emulator, persistence, cfg, caps: { kittyGraphics: true, audioBackend: undefined } },
     {
       createRenderer: ((_ctx: unknown, _emu: unknown, _opts: unknown) =>
-        rendererHandle.controller
-      ) as unknown as typeof import("../src/render.js").createRenderer,
+        rendererHandle.controller) as unknown as typeof import("../src/render.js").createRenderer,
     },
   );
 
@@ -532,9 +599,7 @@ test("overlay handler: ctx.ui.custom rejection notifies user with error", async 
   await mockPi.pressShortcut("alt+g", throwingCtx);
 
   assert.ok(
-    notifyCalls.some(
-      (n) => n.message.includes("overlay failed") && n.type === "error",
-    ),
+    notifyCalls.some((n) => n.message.includes("overlay failed") && n.type === "error"),
     "error notify emitted when ctx.ui.custom rejects",
   );
 });

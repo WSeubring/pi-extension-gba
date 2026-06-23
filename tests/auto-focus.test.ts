@@ -1,16 +1,17 @@
+import { defined } from "./harness/assert.js";
 /**
  * Phase 9c tests — auto-focus lifecycle coupling.
  * Design ref: docs/design/phase-9c-auto-focus-lifecycle.md §Test plan
  */
-import { test, mock } from "node:test";
-import assert from "node:assert/strict";
 
-import { createAutoFocus } from "../src/auto-focus.js";
-import type { AutoFocusDeps, AutoFocus } from "../src/auto-focus.js";
-import type { ExtensionAPI, ExtensionContext, AgentStartEvent, AgentEndEvent } from "@mariozechner/pi-coding-agent";
-import type { RenderControllerWithSwap, GbaGameComponent } from "../src/render.js";
-import type { Lifecycle } from "../src/lifecycle.js";
+import assert from "node:assert/strict";
+import { mock, test } from "node:test";
+import type { AgentEndEvent, AgentStartEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AudioPlayer } from "../src/audio.js";
+import type { AutoFocusDeps } from "../src/auto-focus.js";
+import { createAutoFocus } from "../src/auto-focus.js";
+import type { Lifecycle } from "../src/lifecycle.js";
+import type { GbaGameComponent, RenderControllerWithSwap } from "../src/render.js";
 
 // ---------------------------------------------------------------------------
 // Flush helper — drains the microtask/setImmediate queue N times to avoid
@@ -55,7 +56,9 @@ function makeMockPi(): MockPi {
   const mockCtx: ExtensionContext = {
     ui: {
       notify() {},
-      custom: async (factory: (tui: unknown, theme: unknown, kb: unknown, done: (r: undefined) => void) => unknown) => {
+      custom: async (
+        _factory: (tui: unknown, theme: unknown, kb: unknown, done: (r: undefined) => void) => unknown,
+      ) => {
         // Default custom: just call factory and return immediately (simulates instant done)
         return undefined;
       },
@@ -72,8 +75,12 @@ function makeMockPi(): MockPi {
 
   return {
     pi,
-    async fireAgentStart() { await fireEvent("agent_start"); },
-    async fireAgentEnd() { await fireEvent("agent_end"); },
+    async fireAgentStart() {
+      await fireEvent("agent_start");
+    },
+    async fireAgentEnd() {
+      await fireEvent("agent_end");
+    },
     shortcutHandlers,
   };
 }
@@ -97,13 +104,19 @@ function makeMockRender(): MockRender {
     expand() {},
     hide() {},
     destroy() {},
-    onRenderError() { return () => {}; },
-    __testGetImageId() { return undefined; },
+    onRenderError() {
+      return () => {};
+    },
+    __testGetImageId() {
+      return undefined;
+    },
     useBackend(kind: string) {
       useBackendCalls.push(kind);
       activeKind = kind;
     },
-    activeBackend() { return activeKind as "widget" | "custom"; },
+    activeBackend() {
+      return activeKind as "widget" | "custom";
+    },
     setCustomComponent(c: GbaGameComponent) {
       customComponent = c;
     },
@@ -122,9 +135,13 @@ function makeMockLifecycle(isRunning = true): Lifecycle {
     attach() {},
     detach() {},
     manualPauseToggle() {},
-    isRunning() { return isRunning; },
+    isRunning() {
+      return isRunning;
+    },
     onRomLoad() {},
-    isCrashed() { return false; },
+    isCrashed() {
+      return false;
+    },
     acknowledgeCrash() {},
   };
 }
@@ -141,21 +158,22 @@ function makeControllableCustom(): {
   let resolveCallback: (() => void) | null = null;
   let started = false;
 
-  // Cast to `any` for the implementation because the generic signature is
-  // hard to satisfy in a test double; the runtime behaviour is correct.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const customFn = (factory: (tui: any, theme: any, kb: any, done: (r: undefined) => void) => any): Promise<undefined> => {
+  // The real `custom<T>` signature (tui/theme/keybindings/done) is awkward to
+  // satisfy with a full test double, so we derive the factory's parameter types
+  // from the real API type and cast only the minimal stubs we pass in — no `any`.
+  type CustomFactory = Parameters<ExtensionContext["ui"]["custom"]>[0];
+  const customFn = (factory: CustomFactory): Promise<undefined> => {
     started = true;
     return new Promise<undefined>((resolve) => {
       resolveCallback = () => resolve(undefined);
-      const done = (r: undefined) => {
-        resolve(r);
+      const done = (r: unknown) => {
+        resolve(r as undefined);
       };
       const fakeTui = {
         terminal: { rows: 40, write() {} },
         requestRender() {},
-      };
-      factory(fakeTui, {}, {}, done);
+      } as unknown as Parameters<CustomFactory>[0];
+      factory(fakeTui, {} as Parameters<CustomFactory>[1], {} as Parameters<CustomFactory>[2], done);
     });
   };
 
@@ -188,7 +206,9 @@ function makeDeps(
     render: renderOverride,
     emulator: {
       step() {},
-      getFramebuffer() { return new Uint8Array(0); },
+      getFramebuffer() {
+        return new Uint8Array(0);
+      },
       press() {},
       release() {},
     } as unknown as AutoFocusDeps["emulator"],
@@ -230,10 +250,10 @@ test("auto-enter-on-start: agent_start + debounce → ctx.ui.custom called", asy
   try {
     // Fire agent_start — this schedules a setTimeout for 500 ms.
     // We need to fire the event with our controllable ctx. Patch mockPi to use our ctx.
-    const handlers = (mockPi.pi as unknown as { on: (e: string, h: HandlerFn) => void });
+    const _handlers = mockPi.pi as unknown as { on: (e: string, h: HandlerFn) => void };
     // Get the stored handler and call it directly with controllable ctx.
     // We simulate: agent_start fires with controllable ctx.
-    const piInternal = mockPi.pi as unknown as {
+    const _piInternal = mockPi.pi as unknown as {
       [key: string]: unknown;
     };
     // Fire using the mock's internal approach but pass our ctx.
@@ -444,10 +464,9 @@ test("env-opt-out: autoFocusOnAgentStart=false blocks auto-entry but alt+g still
   } as unknown as ExtensionAPI;
 
   const { render } = makeMockRender();
-  const deps = makeDeps(
-    { render, cfg: { autoFocusOnAgentStart: false, autoFocusDebounceMs: 500, scale: 2 } },
-    { pi } as unknown as MockPi,
-  );
+  const deps = makeDeps({ render, cfg: { autoFocusOnAgentStart: false, autoFocusDebounceMs: 500, scale: 2 } }, {
+    pi,
+  } as unknown as MockPi);
   const af = createAutoFocus(deps);
   af.attach();
 
@@ -468,7 +487,7 @@ test("env-opt-out: autoFocusOnAgentStart=false blocks auto-entry but alt+g still
 
     const controllable2 = makeControllableCustom();
     const ctx2 = makeCtxWithControllableCustom(controllable2);
-    void altG!(ctx2);
+    void defined(altG, "altG")(ctx2);
     await flushAsync();
 
     assert.ok(af.isInGameMode(), "alt+g still enters game mode");
@@ -577,22 +596,27 @@ test("alt+g while Paused enters game mode (L3 manual entry during agent_end)", a
 
   // Simulate lifecycle in Paused state (isRunning=false).
   const pausedLifecycle: Lifecycle = {
-    attach() {}, detach() {}, manualPauseToggle() {},
-    isRunning() { return false; },
-    onRomLoad() {}, isCrashed() { return false; }, acknowledgeCrash() {},
+    attach() {},
+    detach() {},
+    manualPauseToggle() {},
+    isRunning() {
+      return false;
+    },
+    onRomLoad() {},
+    isCrashed() {
+      return false;
+    },
+    acknowledgeCrash() {},
   };
 
-  const deps = makeDeps(
-    { render, lifecycle: pausedLifecycle },
-    { pi } as unknown as MockPi,
-  );
+  const deps = makeDeps({ render, lifecycle: pausedLifecycle }, { pi } as unknown as MockPi);
   const af = createAutoFocus(deps);
   af.attach();
 
   const altG = shortcutHandlers.get("alt+g");
   assert.ok(altG !== undefined, "alt+g shortcut must be registered");
 
-  void altG!(ctx);
+  void defined(altG, "altG")(ctx);
   await flushAsync();
 
   assert.ok(af.isInGameMode(), "alt+g while Paused must enter game mode (L3)");
@@ -620,7 +644,9 @@ test("widget live-tick policy: autoFocus enabled → setWidgetLiveTick(false) ca
   const render: RenderControllerWithSwap = {
     ...base.render,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    setWidgetLiveTick(enabled: boolean) { liveTickCalls.push(enabled); },
+    setWidgetLiveTick(enabled: boolean) {
+      liveTickCalls.push(enabled);
+    },
   } as unknown as RenderControllerWithSwap;
 
   const deps = makeDeps({ render }, { pi } as unknown as MockPi);
@@ -644,13 +670,14 @@ test("widget live-tick policy: autoFocus disabled → setWidgetLiveTick(true) (l
   const base = makeMockRender();
   const render: RenderControllerWithSwap = {
     ...base.render,
-    setWidgetLiveTick(enabled: boolean) { liveTickCalls.push(enabled); },
+    setWidgetLiveTick(enabled: boolean) {
+      liveTickCalls.push(enabled);
+    },
   } as unknown as RenderControllerWithSwap;
 
-  const deps = makeDeps(
-    { render, cfg: { autoFocusOnAgentStart: false, autoFocusDebounceMs: 500, scale: 2 } },
-    { pi } as unknown as MockPi,
-  );
+  const deps = makeDeps({ render, cfg: { autoFocusOnAgentStart: false, autoFocusDebounceMs: 500, scale: 2 } }, {
+    pi,
+  } as unknown as MockPi);
   const af = createAutoFocus(deps);
   af.attach();
 
@@ -742,16 +769,30 @@ function makeControllableAudio(): {
     writeSamples() {},
     mute() {},
     unmute() {},
-    isMuted() { return false; },
-    onCrash() { return () => {}; },
+    isMuted() {
+      return false;
+    },
+    onCrash() {
+      return () => {};
+    },
   } as unknown as AudioPlayer;
 
   return {
     audio,
-    resolveStart: () => { for (const r of startResolvers) r(); startResolvers = []; },
-    resolveStop: () => { for (const r of stopResolvers) r(); stopResolvers = []; },
-    holdStart: (hold) => { startHeld = hold; },
-    holdStop: (hold) => { stopHeld = hold; },
+    resolveStart: () => {
+      for (const r of startResolvers) r();
+      startResolvers = [];
+    },
+    resolveStop: () => {
+      for (const r of stopResolvers) r();
+      stopResolvers = [];
+    },
+    holdStart: (hold) => {
+      startHeld = hold;
+    },
+    holdStop: (hold) => {
+      stopHeld = hold;
+    },
   };
 }
 
@@ -880,7 +921,9 @@ test("enterManual failure: manualEnteredDuringChat is cleared, later auto-entrie
   const failingCtx = {
     ui: {
       notify() {},
-      custom: async () => { throw new Error("tui exploded"); },
+      custom: async () => {
+        throw new Error("tui exploded");
+      },
     },
   } as unknown as ExtensionContext;
 
@@ -960,7 +1003,9 @@ test("auto-entry and manual alt+g entry both call lifecycle.resume()", async () 
     let resumeCalls = 0;
     const lifecycleWithResume: Lifecycle = {
       ...makeMockLifecycle(false),
-      resume() { resumeCalls++; },
+      resume() {
+        resumeCalls++;
+      },
     };
 
     const startHandlers: HandlerFn[] = [];

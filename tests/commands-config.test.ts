@@ -1,16 +1,16 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import fsPromises from "node:fs/promises";
-import path from "node:path";
 import os from "node:os";
-
-import { registerAll, handleConfig } from "../src/commands.js";
-import type { CommandDeps } from "../src/commands.js";
-import { loadConfigFile, popQueuedWarning, saveConfigFile, resetConfigFile } from "../src/config.js";
-import type { GbaConfig } from "../src/config.js";
-import type { Persistence } from "../src/persistence.js";
-import type { Lifecycle, RenderController } from "../src/lifecycle.js";
+import path from "node:path";
+import { test } from "node:test";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { CommandDeps } from "../src/commands.js";
+import { handleConfig, registerAll } from "../src/commands.js";
+import type { GbaConfig } from "../src/config.js";
+import { loadConfigFile, popQueuedWarning, saveConfigFile } from "../src/config.js";
+import type { Lifecycle, RenderController } from "../src/lifecycle.js";
+import type { Persistence } from "../src/persistence.js";
+import { defined } from "./harness/assert.js";
 
 // ---- temp HOME helpers -------------------------------------------------------
 
@@ -19,15 +19,15 @@ async function withTempHome<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const nestedDir = path.join(dir, ".config", "pi");
   await fsPromises.mkdir(nestedDir, { recursive: true });
 
-  const origHome = process.env["HOME"];
-  const origUserProfile = process.env["USERPROFILE"];
-  process.env["HOME"] = dir;
-  process.env["USERPROFILE"] = dir;
+  const origHome = process.env.HOME;
+  const origUserProfile = process.env.USERPROFILE;
+  process.env.HOME = dir;
+  process.env.USERPROFILE = dir;
   try {
     return await fn(dir);
   } finally {
-    process.env["HOME"] = origHome;
-    process.env["USERPROFILE"] = origUserProfile;
+    process.env.HOME = origHome;
+    process.env.USERPROFILE = origUserProfile;
     await fsPromises.rm(dir, { recursive: true, force: true });
     popQueuedWarning();
   }
@@ -110,9 +110,15 @@ function makeFakePersistence(): Persistence {
     },
     async snapshot() {},
     async flushPending() {},
-    async listRoms() { return []; },
-    async lastPlayed() { return undefined; },
-    currentRom() { return undefined; },
+    async listRoms() {
+      return [];
+    },
+    async lastPlayed() {
+      return undefined;
+    },
+    currentRom() {
+      return undefined;
+    },
     async clearState() {},
     destroy() {},
   };
@@ -123,9 +129,13 @@ function makeFakeLifecycle(): Lifecycle {
     attach() {},
     detach() {},
     manualPauseToggle() {},
-    isRunning() { return false; },
+    isRunning() {
+      return false;
+    },
     onRomLoad() {},
-    isCrashed() { return false; },
+    isCrashed() {
+      return false;
+    },
     acknowledgeCrash() {},
   } as unknown as Lifecycle;
 }
@@ -172,11 +182,7 @@ test("menu flow: pick Scale → 3x → saves scale:3 to disk", async () => {
     //   1st call = main menu pick "Scale: 2x"
     //   2nd call = scale sub-menu → "3x"
     //   3rd call = main menu → "Close" to exit
-    const { ctx, notifyCalls } = makeFakeCtx([
-      "Scale: 2x",
-      "3x",
-      "Close",
-    ]);
+    const { ctx, notifyCalls } = makeFakeCtx(["Scale: 2x", "3x", "Close"]);
 
     await handleConfig(ctx, deps);
 
@@ -190,7 +196,7 @@ test("menu flow: pick Scale → 3x → saves scale:3 to disk", async () => {
     // Check notify
     const saveNotify = notifyCalls.find((n) => n.message.includes("scale = 3x"));
     assert.ok(saveNotify, "save notification should mention scale = 3x");
-    assert.equal(saveNotify!.type, "info");
+    assert.equal(saveNotify?.type, "info");
   });
 });
 
@@ -215,11 +221,7 @@ test("menu cancel: select returns undefined → no write, no notify", async () =
 test("menu flow: toggle autoFocusOnAgentStart off → saved", async () => {
   await withTempHome(async () => {
     const deps = makeDeps();
-    const { ctx } = makeFakeCtx([
-      "Auto-focus on agent_start: on",
-      "off",
-      "Close",
-    ]);
+    const { ctx } = makeFakeCtx(["Auto-focus on agent_start: on", "off", "Close"]);
 
     await handleConfig(ctx, deps);
 
@@ -233,10 +235,7 @@ test("menu flow: toggle autoFocusOnAgentStart off → saved", async () => {
 test("menu flow: change debounce to 1200 → saved", async () => {
   await withTempHome(async () => {
     const deps = makeDeps();
-    const { ctx } = makeFakeCtx(
-      ["Auto-focus debounce: 500 ms", "Close"],
-      ["1200"],
-    );
+    const { ctx } = makeFakeCtx(["Auto-focus debounce: 500 ms", "Close"], ["1200"]);
 
     await handleConfig(ctx, deps);
 
@@ -250,10 +249,7 @@ test("menu flow: change debounce to 1200 → saved", async () => {
 test("menu flow: invalid debounce input → warning, loop continues, then Close", async () => {
   await withTempHome(async () => {
     const deps = makeDeps();
-    const { ctx, notifyCalls } = makeFakeCtx(
-      ["Auto-focus debounce: 500 ms", "Close"],
-      ["not-a-number"],
-    );
+    const { ctx, notifyCalls } = makeFakeCtx(["Auto-focus debounce: 500 ms", "Close"], ["not-a-number"]);
 
     await handleConfig(ctx, deps);
 
@@ -290,8 +286,8 @@ test("env override (PI_GBA_AUDIO=1) not persisted when saving an unrelated key",
   const { resolveConfig } = await import("../src/config.js");
 
   await withTempHome(async () => {
-    const origEnv = process.env["PI_GBA_AUDIO"];
-    process.env["PI_GBA_AUDIO"] = "1";
+    const origEnv = process.env.PI_GBA_AUDIO;
+    process.env.PI_GBA_AUDIO = "1";
     try {
       // Runtime cfg carries the session-scoped env override (audio: true).
       const cfg = await resolveConfig();
@@ -299,10 +295,7 @@ test("env override (PI_GBA_AUDIO=1) not persisted when saving an unrelated key",
       const deps = makeDeps(cfg);
 
       // Save an unrelated key (debounce) via the config menu.
-      const { ctx } = makeFakeCtx(
-        ["Auto-focus debounce: 500 ms", "Close"],
-        ["1200"],
-      );
+      const { ctx } = makeFakeCtx(["Auto-focus debounce: 500 ms", "Close"], ["1200"]);
       await handleConfig(ctx, deps);
 
       assert.equal(deps.cfg.audio, true, "runtime cfg keeps the env override");
@@ -311,9 +304,9 @@ test("env override (PI_GBA_AUDIO=1) not persisted when saving an unrelated key",
       assert.notEqual(loaded.audio, true, "env-only audio override must NOT be baked into gba.json");
     } finally {
       if (origEnv === undefined) {
-        delete process.env["PI_GBA_AUDIO"];
+        delete process.env.PI_GBA_AUDIO;
       } else {
-        process.env["PI_GBA_AUDIO"] = origEnv;
+        process.env.PI_GBA_AUDIO = origEnv;
       }
     }
   });
@@ -343,7 +336,13 @@ test("/gba config reset: clears config file and resets deps.cfg to defaults", as
     // Build a fake pi and ctx that supports notify + confirm for the dispatch test
     let registeredHandler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | null = null;
     const pi = {
-      registerCommand(_name: string, opts: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>; getArgumentCompletions?: unknown }) {
+      registerCommand(
+        _name: string,
+        opts: {
+          handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+          getArgumentCompletions?: unknown;
+        },
+      ) {
         registeredHandler = opts.handler;
       },
       on() {},
@@ -353,15 +352,26 @@ test("/gba config reset: clears config file and resets deps.cfg to defaults", as
     const notifyCalls: NotifyCall[] = [];
     const ctx = {
       ui: {
-        notify(message: string, type?: string) { notifyCalls.push({ message, type: type ?? undefined }); },
-        async select() { return "Close"; },
-        async input() { return undefined; },
-        async confirm() { return false; },
+        notify(message: string, type?: string) {
+          notifyCalls.push({ message, type: type ?? undefined });
+        },
+        async select() {
+          return "Close";
+        },
+        async input() {
+          return undefined;
+        },
+        async confirm() {
+          return false;
+        },
       },
     } as unknown as ExtensionCommandContext;
 
     registerAll(pi, deps);
-    await registeredHandler!("config reset", ctx);
+    await defined<(args: string, ctx: ExtensionCommandContext) => Promise<void>>(
+      registeredHandler,
+      "registeredHandler",
+    )("config reset", ctx);
 
     // Config file should be gone
     const loaded = await loadConfigFile();
@@ -401,16 +411,16 @@ test("resolveConfig precedence: PI_GBA_AUTO_FOCUS=1 overrides file autoFocusOnAg
       audio: false,
     });
 
-    const origEnv = process.env["PI_GBA_AUTO_FOCUS"];
-    process.env["PI_GBA_AUTO_FOCUS"] = "1";
+    const origEnv = process.env.PI_GBA_AUTO_FOCUS;
+    process.env.PI_GBA_AUTO_FOCUS = "1";
     try {
       const cfg = await resolveConfig();
       assert.equal(cfg.autoFocusOnAgentStart, true, "env PI_GBA_AUTO_FOCUS=1 should override file value false");
     } finally {
       if (origEnv === undefined) {
-        delete process.env["PI_GBA_AUTO_FOCUS"];
+        delete process.env.PI_GBA_AUTO_FOCUS;
       } else {
-        process.env["PI_GBA_AUTO_FOCUS"] = origEnv;
+        process.env.PI_GBA_AUTO_FOCUS = origEnv;
       }
     }
   });
@@ -434,13 +444,13 @@ test("resolveConfig precedence: file scale:1 overrides default scale:2", async (
     });
 
     // Ensure no env var overriding
-    const origEnv = process.env["PI_GBA_AUTO_FOCUS"];
-    delete process.env["PI_GBA_AUTO_FOCUS"];
+    const origEnv = process.env.PI_GBA_AUTO_FOCUS;
+    delete process.env.PI_GBA_AUTO_FOCUS;
     try {
       const cfg = await resolveConfig();
       assert.equal(cfg.scale, 1, "file scale:1 should override default scale:2");
     } finally {
-      if (origEnv !== undefined) process.env["PI_GBA_AUTO_FOCUS"] = origEnv;
+      if (origEnv !== undefined) process.env.PI_GBA_AUTO_FOCUS = origEnv;
     }
   });
 });

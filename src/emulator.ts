@@ -93,9 +93,7 @@ export class Emulator implements ButtonSink {
       throw new RomLoadError(`ROM is empty: ${romPath}`);
     }
     if (bytes.length > MAX_ROM_BYTES) {
-      throw new RomLoadError(
-        `ROM exceeds 32 MiB limit (${bytes.length} bytes): ${romPath}`,
-      );
+      throw new RomLoadError(`ROM exceeds 32 MiB limit (${bytes.length} bytes): ${romPath}`);
     }
 
     const basename = path.basename(romPath);
@@ -105,10 +103,7 @@ export class Emulator implements ButtonSink {
     try {
       this.#module.FS.writeFile(vfsRomPath, bytes);
     } catch (e) {
-      throw new RomLoadError(
-        `Failed to write ROM to emulator VFS at ${vfsRomPath}`,
-        { cause: e },
-      );
+      throw new RomLoadError(`Failed to write ROM to emulator VFS at ${vfsRomPath}`, { cause: e });
     }
 
     if (this.#pendingSram) {
@@ -118,10 +113,7 @@ export class Emulator implements ButtonSink {
       try {
         this.#module.FS.writeFile(vfsSavPath, this.#pendingSram);
       } catch (e) {
-        throw new RomLoadError(
-          `Failed to write SRAM to emulator VFS at ${vfsSavPath}`,
-          { cause: e },
-        );
+        throw new RomLoadError(`Failed to write SRAM to emulator VFS at ${vfsSavPath}`, { cause: e });
       }
     }
 
@@ -168,9 +160,7 @@ export class Emulator implements ButtonSink {
     };
     const rf = mod.runFrame ?? mod._runFrame;
     if (typeof rf !== "function") {
-      throw new EmulatorCrashError(
-        "mGBA runFrame export missing — vendor build predates ADR 0002",
-      );
+      throw new EmulatorCrashError("mGBA runFrame export missing — vendor build predates ADR 0002");
     }
     for (let i = 0; i < n; i++) rf();
   }
@@ -213,10 +203,7 @@ export class Emulator implements ButtonSink {
       const bytes = this.#module.FS.readFile(vfsPath);
       return bytes;
     } catch (e) {
-      throw new StateIoError(
-        `Failed to read save-state from VFS at ${vfsPath}`,
-        { cause: e },
-      );
+      throw new StateIoError(`Failed to read save-state from VFS at ${vfsPath}`, { cause: e });
     }
   }
 
@@ -226,10 +213,7 @@ export class Emulator implements ButtonSink {
     try {
       this.#module.FS.writeFile(vfsPath, bytes);
     } catch (e) {
-      throw new StateIoError(
-        `Failed to write save-state to VFS at ${vfsPath}`,
-        { cause: e },
-      );
+      throw new StateIoError(`Failed to write save-state to VFS at ${vfsPath}`, { cause: e });
     }
     const ok = this.#module.loadState(0);
     if (!ok) throw new StateIoError("mGBA loadState(0) returned false");
@@ -287,9 +271,7 @@ export class Emulator implements ButtonSink {
       HEAP16: Int16Array;
     };
     if (typeof mod._getAudioSamples !== "function") {
-      throw new EmulatorCrashError(
-        "mGBA getAudioSamples export missing — vendor build predates ADR 0006",
-      );
+      throw new EmulatorCrashError("mGBA getAudioSamples export missing — vendor build predates ADR 0006");
     }
 
     const framesWritten = mod._getAudioSamples(this.#scratchPtr, capped);

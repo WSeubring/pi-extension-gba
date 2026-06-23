@@ -8,12 +8,11 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { RenderControllerWithSwap } from "./render.js";
-import type { EmulatorLike } from "./render.js";
-import type { ButtonSink } from "./types.js";
-import type { Lifecycle } from "./lifecycle.js";
 import type { AudioPlayer } from "./audio.js";
 import { GbaGameComponent } from "./game-component.js";
+import type { Lifecycle } from "./lifecycle.js";
+import type { EmulatorLike, RenderControllerWithSwap } from "./render.js";
+import type { ButtonSink } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -58,8 +57,7 @@ export interface AutoFocus {
 
 export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
   const { pi, emulator, lifecycle, cfg, caps, notifyUnsupported } = deps;
-  const log = (msg: string) =>
-    deps.logger ? deps.logger(msg) : console.error(msg);
+  const log = (msg: string) => (deps.logger ? deps.logger(msg) : console.error(msg));
 
   // Convenience accessor for the optional audio player.
   function getAudio(): AudioPlayer | undefined {
@@ -110,10 +108,7 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
   // Core enter / exit helpers
   // ---------------------------------------------------------------------------
 
-  async function enter(
-    ctx: ExtensionContext,
-    opts?: { resume?: boolean },
-  ): Promise<void> {
+  async function enter(ctx: ExtensionContext, opts?: { resume?: boolean }): Promise<void> {
     const render = deps.render;
     if (!render) {
       log("[pi-extension-gba] auto-focus enter: no render controller (no ROM loaded)");
@@ -262,13 +257,13 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
         // otherwise also run doubled handlers).
         if (!attached) return;
         if (!cfg.autoFocusOnAgentStart) return;
-        if (!deps.render) return;  // no ROM loaded yet
+        if (!deps.render) return; // no ROM loaded yet
         if (!caps.kittyGraphics) return;
         // Re-apply on every agent_start so lazily-constructed renderers
         // pick up the "no ambient widget" policy before the first Running tick.
         applyWidgetLiveTickPolicy();
-        if (manualExitedDuringGame) return;  // user exited mid-agent; suppress
-        if (mode === "game") return;  // already in game mode
+        if (manualExitedDuringGame) return; // user exited mid-agent; suppress
+        if (mode === "game") return; // already in game mode
 
         // Phase 9 REVISE B3: defensive — clear any previously armed timer so
         // back-to-back agent_start events (theoretical race) never leave two
@@ -289,7 +284,7 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
           // Fast reply — cancel before entering; arm for next turn.
           clearTimeout(pendingEnterTimer);
           pendingEnterTimer = undefined;
-          manualExitedDuringGame = false;  // reset so next agent_start auto-enters
+          manualExitedDuringGame = false; // reset so next agent_start auto-enters
           return;
         }
 

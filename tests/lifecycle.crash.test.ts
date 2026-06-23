@@ -1,21 +1,28 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-
-import { createLifecycle } from "../src/lifecycle.js";
-import type { RenderController, LifecycleOptions } from "../src/lifecycle.js";
+import { test } from "node:test";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { Emulator } from "../src/emulator.js";
-import type {
-  ExtensionAPI,
-} from "@mariozechner/pi-coding-agent";
+import type { LifecycleOptions, RenderController } from "../src/lifecycle.js";
+import { createLifecycle } from "../src/lifecycle.js";
 
 function makeMockRender(): { render: RenderController; calls: string[] } {
   const calls: string[] = [];
   const render: RenderController = {
-    start() { calls.push("start"); },
-    stop() { calls.push("stop"); },
-    shrink() { calls.push("shrink"); },
-    expand() { calls.push("expand"); },
-    hide() { calls.push("hide"); },
+    start() {
+      calls.push("start");
+    },
+    stop() {
+      calls.push("stop");
+    },
+    shrink() {
+      calls.push("shrink");
+    },
+    expand() {
+      calls.push("expand");
+    },
+    hide() {
+      calls.push("hide");
+    },
   };
   return { render, calls };
 }
@@ -26,13 +33,19 @@ function makeMockEmulator(): {
 } {
   let crashCb: ((err: Error) => void) | null = null;
   const emulator = {
-    onCrash(cb: (err: Error) => void) { crashCb = cb; },
+    onCrash(cb: (err: Error) => void) {
+      crashCb = cb;
+    },
     release(_button: string) {},
-    saveState() { return new Uint8Array(0); },
+    saveState() {
+      return new Uint8Array(0);
+    },
   } as unknown as Emulator;
   return {
     emulator,
-    triggerCrash(err: Error) { if (crashCb) crashCb(err); },
+    triggerCrash(err: Error) {
+      if (crashCb) crashCb(err);
+    },
   };
 }
 
@@ -43,7 +56,6 @@ function makeMockPi(): { pi: ExtensionAPI } {
   } as unknown as ExtensionAPI;
   return { pi };
 }
-
 
 function makeOpts(overrides?: Partial<LifecycleOptions>): LifecycleOptions {
   return {
@@ -121,11 +133,7 @@ test("manualPauseToggle while crashed is a no-op (no additional render calls)", 
 
   lifecycle.manualPauseToggle();
 
-  assert.deepEqual(
-    calls,
-    callsAfterCrash,
-    "manualPauseToggle while crashed must not produce additional render calls",
-  );
+  assert.deepEqual(calls, callsAfterCrash, "manualPauseToggle while crashed must not produce additional render calls");
 });
 
 test("double crash is idempotent", () => {
@@ -142,5 +150,9 @@ test("double crash is idempotent", () => {
   triggerCrash(new Error("second"));
 
   assert.equal(lifecycle.isCrashed(), true, "still crashed after second trigger");
-  assert.deepEqual(calls, [...callsAfterFirst, "stop", "shrink"], "second crash fires render.stop+shrink again (idempotent flag)");
+  assert.deepEqual(
+    calls,
+    [...callsAfterFirst, "stop", "shrink"],
+    "second crash fires render.stop+shrink again (idempotent flag)",
+  );
 });

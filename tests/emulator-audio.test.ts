@@ -2,17 +2,14 @@
  * Phase 8a audio accessor tests.
  * Design ref: docs/design/phase-8a-vendor-audio.md §Test plan
  */
-import { test } from "node:test";
+
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { test } from "node:test";
 
-import {
-  Emulator,
-  EmulatorNotLoadedError,
-  EmulatorCrashError,
-} from "../src/emulator.js";
+import { Emulator, EmulatorCrashError, EmulatorNotLoadedError } from "../src/emulator.js";
 import type mGBA from "../vendor/mgba-wasm/dist/mgba.js";
 
 // ---------------------------------------------------------------------------
@@ -73,13 +70,22 @@ function buildMockModule(opts: MockModuleOptions = {}): MgbaModule {
         autosave: "/data/autosave",
       };
     },
-    FS: { writeFile() {}, readFile() { return new Uint8Array(0); } },
-    loadGame() { return true; },
-    getSave() { return null; },
+    FS: {
+      writeFile() {},
+      readFile() {
+        return new Uint8Array(0);
+      },
+    },
+    loadGame() {
+      return true;
+    },
+    getSave() {
+      return null;
+    },
   };
 
   if (!opts.omitGetAudioSamples) {
-    mod["_getAudioSamples"] = (dest: number, max: number) => {
+    mod._getAudioSamples = (dest: number, max: number) => {
       getAudioSamplesCalls.push({ dest, max });
       return opts.framesWritten ?? 0;
     };
@@ -156,7 +162,7 @@ test("getAudioSamples: clamp — maxFrames > 2048 passes 2048 to _getAudioSample
   emulator.getAudioSamples(999_999);
 
   assert.equal(getAudioSamplesCalls.length, 1, "_getAudioSamples called once");
-  assert.equal(getAudioSamplesCalls[0]!.max, SCRATCH_FRAMES, "max clamped to 2048");
+  assert.equal(getAudioSamplesCalls[0]?.max, SCRATCH_FRAMES, "max clamped to 2048");
 });
 
 // ---------------------------------------------------------------------------
@@ -179,7 +185,7 @@ test("getAudioSamples: empty ring returns Int16Array(0)", () => {
 test("getAudioSamples: non-zero ring returns correct interleaved slice from HEAP16", () => {
   const heap16 = new Int16Array(8192);
   const offset = FAKE_SCRATCH_PTR / 2; // 512 — int16 element index of scratchPtr
-  heap16[offset]     = 100; // L0
+  heap16[offset] = 100; // L0
   heap16[offset + 1] = 200; // R0
   heap16[offset + 2] = 300; // L1
   heap16[offset + 3] = 400; // R1
@@ -206,14 +212,14 @@ test("getAudioSamples: non-zero ring returns correct interleaved slice from HEAP
 test("getAudioSamples: output is a copy, not a view into HEAP16", () => {
   const heap16 = new Int16Array(8192);
   const offset = FAKE_SCRATCH_PTR / 2;
-  heap16[offset]     = 1000;
+  heap16[offset] = 1000;
   heap16[offset + 1] = 2000;
 
   const emulator = makeLoadedEmulator({ framesWritten: 1, heap16 });
   const result = emulator.getAudioSamples(2048);
 
   // Mutate HEAP16 after the call
-  heap16[offset]     = 9999;
+  heap16[offset] = 9999;
   heap16[offset + 1] = 9999;
 
   assert.equal(result[0], 1000, "copy unaffected by post-call HEAP16 mutation");
@@ -231,10 +237,7 @@ test("getAudioSamples: missing _getAudioSamples export throws EmulatorCrashError
     () => emulator.getAudioSamples(2048),
     (err: unknown) => {
       assert.ok(err instanceof EmulatorCrashError);
-      assert.ok(
-        (err as EmulatorCrashError).message.includes("ADR 0006"),
-        "error message references ADR 0006",
-      );
+      assert.ok((err as EmulatorCrashError).message.includes("ADR 0006"), "error message references ADR 0006");
       return true;
     },
   );
@@ -280,8 +283,8 @@ test("getAudioSamples: _getAudioSamples called with correct scratchPtr", () => {
   emulator.getAudioSamples(512);
 
   assert.equal(getAudioSamplesCalls.length, 1);
-  assert.equal(getAudioSamplesCalls[0]!.dest, FAKE_SCRATCH_PTR, "dest is the persistent scratchPtr");
-  assert.equal(getAudioSamplesCalls[0]!.max, 512, "max matches requested frames");
+  assert.equal(getAudioSamplesCalls[0]?.dest, FAKE_SCRATCH_PTR, "dest is the persistent scratchPtr");
+  assert.equal(getAudioSamplesCalls[0]?.max, 512, "max matches requested frames");
 });
 
 // ---------------------------------------------------------------------------
@@ -306,7 +309,7 @@ test("getAudioSamples: fractional maxFrames is floored", () => {
   emulator.getAudioSamples(10.9);
 
   assert.equal(getAudioSamplesCalls.length, 1);
-  assert.equal(getAudioSamplesCalls[0]!.max, 10, "fractional maxFrames is floored");
+  assert.equal(getAudioSamplesCalls[0]?.max, 10, "fractional maxFrames is floored");
 });
 
 // ---------------------------------------------------------------------------
@@ -323,11 +326,15 @@ test("load: uppercase .GBA ROM seeds SRAM and save-state under the same stem", a
   try {
     const vfsWrites: string[] = [];
     const mod = buildMockModule() as unknown as Record<string, unknown>;
-    mod["FS"] = {
-      writeFile(path: string) { vfsWrites.push(path); },
-      readFile() { return new Uint8Array(0); },
+    mod.FS = {
+      writeFile(path: string) {
+        vfsWrites.push(path);
+      },
+      readFile() {
+        return new Uint8Array(0);
+      },
     };
-    mod["loadState"] = () => true;
+    mod.loadState = () => true;
 
     const emulator = new Emulator(mod as unknown as MgbaModule, FAKE_SCRATCH_PTR);
     emulator.writeSram(new Uint8Array([1, 2, 3]));

@@ -6,20 +6,16 @@
  *   2. PI_GBA_FRAME_DUMP set, every=2, 10 frames → 5 PNGs (decodable, dims match).
  *   3. Invalid (read-only) dump dir → hook silently disables; no crash.
  */
-import { test } from "node:test";
+
 import assert from "node:assert/strict";
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, chmodSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-import { decode as decodePng } from "fast-png";
-
-import {
-  createRenderer,
-  type EmulatorLike,
-  type GbaGameComponent,
-} from "../src/render.js";
+import { test } from "node:test";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { decode as decodePng } from "fast-png";
+import { createRenderer, type EmulatorLike, type GbaGameComponent } from "../src/render.js";
 
 const GBA_W = 240;
 const GBA_H = 160;
@@ -64,10 +60,7 @@ function tryRm(path: string): void {
  * the attachCustomComponent adapter — same path tick() uses.
  * scale=1 keeps dims at 240x160.
  */
-async function driveFrames(
-  frames: number,
-  extraEnv: Record<string, string | undefined>,
-): Promise<void> {
+async function driveFrames(frames: number, extraEnv: Record<string, string | undefined>): Promise<void> {
   // Apply env overrides around createRenderer (env is read at construction).
   const saved: Record<string, string | undefined> = {};
   for (const [k, v] of Object.entries(extraEnv)) {
@@ -81,7 +74,9 @@ async function driveFrames(
     scale: 1,
     frameRate: 30,
     initialBackend: "custom",
-    attachCustomComponent(c) { adapter = c; },
+    attachCustomComponent(c) {
+      adapter = c;
+    },
   });
 
   try {
@@ -181,7 +176,9 @@ test("frame-dump: invalid dir silently disables hook without crashing", async ()
       if (err.code !== "ENOENT" && err.code !== "EACCES") throw e;
     }
   } finally {
-    try { chmodSync(parent, 0o700); } catch {}
+    try {
+      chmodSync(parent, 0o700);
+    } catch {}
     tryRm(parent);
   }
 });

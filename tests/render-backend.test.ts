@@ -1,3 +1,4 @@
+import { defined } from "./harness/assert.js";
 /**
  * Phase 9a backend tests — RenderControllerWithSwap + backend abstraction.
  * Design ref: docs/design/phase-9a-render-backend.md §Test plan
@@ -5,19 +6,15 @@
  * Phase 9 REVISE B1: add end-to-end test proving raw RGBA flows to the custom
  * backend (Kitty f=32 path) and PNG flows to the widget backend (pi-tui Image).
  */
-import { test } from "node:test";
-import assert from "node:assert/strict";
 
-import {
-  createRenderer,
-  type EmulatorLike,
-  type GbaGameComponent,
-} from "../src/render.js";
-import { GbaGameComponent as RealGameComponent } from "../src/game-component.js";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { test } from "node:test";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { TUI } from "@mariozechner/pi-tui";
 import { allocateImageId, deleteKittyImage } from "@mariozechner/pi-tui";
-import { readFileSync } from "node:fs";
+import { GbaGameComponent as RealGameComponent } from "../src/game-component.js";
+import { createRenderer, type EmulatorLike, type GbaGameComponent } from "../src/render.js";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -84,8 +81,12 @@ function makeFakeComponent(): {
 
   return {
     component,
-    get acceptFrameCalls() { return acceptFrameCalls; },
-    get disposeCalls() { return disposeCalls; },
+    get acceptFrameCalls() {
+      return acceptFrameCalls;
+    },
+    get disposeCalls() {
+      return disposeCalls;
+    },
   };
 }
 
@@ -93,12 +94,14 @@ function makeFakeComponent(): {
 function captureStdout(fn: () => void): string {
   const written: Buffer[] = [];
   const orig = process.stdout.write.bind(process.stdout);
-  (process.stdout as unknown as { write: typeof process.stdout.write }).write =
-    (chunk: unknown, ...args: unknown[]) => {
-      if (Buffer.isBuffer(chunk)) written.push(chunk);
-      else if (typeof chunk === "string") written.push(Buffer.from(chunk));
-      return (orig as (...a: unknown[]) => boolean)(chunk, ...args);
-    };
+  (process.stdout as unknown as { write: typeof process.stdout.write }).write = (
+    chunk: unknown,
+    ...args: unknown[]
+  ) => {
+    if (Buffer.isBuffer(chunk)) written.push(chunk);
+    else if (typeof chunk === "string") written.push(Buffer.from(chunk));
+    return (orig as (...a: unknown[]) => boolean)(chunk, ...args);
+  };
   try {
     fn();
   } finally {
@@ -120,7 +123,9 @@ test("swap-backend: useBackend('custom') disposes widget id and routes frames to
   let capturedAdapter: GbaGameComponent | undefined;
   const renderer2 = createRenderer(ctx, makeMockEmulator(), {
     frameRate: 30,
-    attachCustomComponent(c) { capturedAdapter = c; },
+    attachCustomComponent(c) {
+      capturedAdapter = c;
+    },
   });
 
   renderer2.setWidgetLiveTick(true);
@@ -175,7 +180,9 @@ test("two-backends-don't-interfere: custom backend imageId differs from widget b
 
   const renderer = createRenderer(ctx, makeMockEmulator(), {
     frameRate: 30,
-    attachCustomComponent(c) { capturedAdapter = c; },
+    attachCustomComponent(c) {
+      capturedAdapter = c;
+    },
   });
 
   renderer.setWidgetLiveTick(true);
@@ -194,9 +201,9 @@ test("two-backends-don't-interfere: custom backend imageId differs from widget b
 
   // Simulate 9c attaching a component: push a frame through the adapter
   // so the fake component allocates its own imageId
-  const fakeComp = makeFakeComponent();
+  const _fakeComp = makeFakeComponent();
   // Manually push frame through adapter to simulate 9b component accepting a frame
-  capturedAdapter!.acceptFrame(new Uint8Array(10), 480, 320);
+  capturedAdapter?.acceptFrame(new Uint8Array(10), 480, 320);
 
   // The adapter only forwards to the CustomRenderBackend's component slot,
   // but our fakeComp is not wired into the adapter's slot.
@@ -236,10 +243,7 @@ test("imageId lifecycle: each backend emits exactly one deleteKittyImage per all
   assert.notStrictEqual(wId, undefined, "widget must allocate an imageId after first tick");
 
   const widgetDestroyOutput = captureStdout(() => widgetRenderer.destroy());
-  assert.ok(
-    widgetDestroyOutput.includes(`i=${wId}`),
-    `destroy() must emit deleteKittyImage(${wId}) exactly once`,
-  );
+  assert.ok(widgetDestroyOutput.includes(`i=${wId}`), `destroy() must emit deleteKittyImage(${wId}) exactly once`);
 
   // After destroy, id is gone
   assert.strictEqual(widgetRenderer.__testGetImageId(), undefined);
@@ -255,7 +259,9 @@ test("imageId lifecycle: each backend emits exactly one deleteKittyImage per all
 
   const customRenderer = createRenderer(ctx2, makeMockEmulator(), {
     frameRate: 30,
-    attachCustomComponent(c) { capturedAdapter = c; },
+    attachCustomComponent(c) {
+      capturedAdapter = c;
+    },
   });
 
   // Swap to custom immediately
@@ -268,10 +274,7 @@ test("imageId lifecycle: each backend emits exactly one deleteKittyImage per all
 
   // Dispose the custom renderer — should call component.dispose() → deleteKittyImage
   const customDestroyOutput = captureStdout(() => fakeComp.component.dispose());
-  assert.ok(
-    customDestroyOutput.includes(`i=${compId}`),
-    `component.dispose() must emit deleteKittyImage(${compId})`,
-  );
+  assert.ok(customDestroyOutput.includes(`i=${compId}`), `component.dispose() must emit deleteKittyImage(${compId})`);
   assert.strictEqual(fakeComp.disposeCalls, 1, "dispose must be called exactly once");
   assert.strictEqual(fakeComp.component.__getImageId(), undefined, "imageId must be cleared after dispose");
 
@@ -358,14 +361,8 @@ test("destroy is idempotent: calling destroy twice does not throw or double-emit
   const secondDestroyOut = captureStdout(() => widgetRenderer.destroy());
 
   // First destroy emits deleteKittyImage; second must not (imageId already cleared)
-  assert.ok(
-    wId !== undefined && firstDestroyOut.includes(`i=${wId}`),
-    "first destroy must emit deleteKittyImage",
-  );
-  assert.ok(
-    !secondDestroyOut.includes(`i=${wId}`),
-    "second destroy must NOT re-emit deleteKittyImage (idempotent)",
-  );
+  assert.ok(wId !== undefined && firstDestroyOut.includes(`i=${wId}`), "first destroy must emit deleteKittyImage");
+  assert.ok(!secondDestroyOut.includes(`i=${wId}`), "second destroy must NOT re-emit deleteKittyImage (idempotent)");
   assert.strictEqual(widgetRenderer.__testGetImageId(), undefined, "imageId must be undefined after first destroy");
 
   // Custom backend
@@ -402,14 +399,18 @@ test("end-to-end: emulator framebuffer flows as raw RGBA to GbaGameComponent und
 
   const emulator: EmulatorLike = {
     step() {},
-    getFramebuffer() { return frame; },
+    getFramebuffer() {
+      return frame;
+    },
   };
 
   let attachedAdapter: GbaGameComponent | undefined;
   const renderer = createRenderer(ctx, emulator, {
     scale: 2,
     frameRate: 30,
-    attachCustomComponent(c) { attachedAdapter = c; },
+    attachCustomComponent(c) {
+      attachedAdapter = c;
+    },
   });
 
   assert.ok(attachedAdapter !== undefined);
@@ -418,16 +419,17 @@ test("end-to-end: emulator framebuffer flows as raw RGBA to GbaGameComponent und
   // Minimal pi-tui stub — we only need terminal.rows + terminal.write + requestRender.
   const writtenToTerminal: string[] = [];
   const tuiStub = {
-    terminal: { rows: 40, write(s: string) { writtenToTerminal.push(s); } },
+    terminal: {
+      rows: 40,
+      write(s: string) {
+        writtenToTerminal.push(s);
+      },
+    },
     requestRender() {},
   } as unknown as TUI;
 
   const sinkStub = { press() {}, release() {} };
-  const component = new RealGameComponent(
-    tuiStub,
-    { emulator: {}, sink: sinkStub, scale: 2 },
-    () => {},
-  );
+  const component = new RealGameComponent(tuiStub, { emulator: {}, sink: sinkStub, scale: 2 }, () => {});
   renderer.setCustomComponent(component);
   renderer.useBackend("custom");
 
@@ -448,9 +450,9 @@ test("end-to-end: emulator framebuffer flows as raw RGBA to GbaGameComponent und
   assert.ok(imageLine !== undefined, "acceptFrame must pin the Kitty sequence via terminal.write");
 
   // Sequence shape: \x1b_Ga=T,f=24,t=f,...;<base64path>\x1b\\
-  const match = imageLine!.match(/;([A-Za-z0-9+/=]+)\x1b\\/);
+  const match = imageLine?.match(/;([A-Za-z0-9+/=]+)\x1b\\/);
   assert.ok(match, "Kitty sequence payload must be present");
-  const base64Path = match![1]!;
+  const base64Path = defined(match[1], "base64 path");
   const filePath = Buffer.from(base64Path, "base64").toString("utf8");
 
   // Decode file contents and assert byte layout = width * height * 4 raw RGBA.
@@ -470,10 +472,10 @@ test("end-to-end: emulator framebuffer flows as raw RGBA to GbaGameComponent und
   assert.strictEqual(decoded[2], 3, "decoded B");
   assert.strictEqual(decoded[3], 0xff, "decoded A (forced opaque)");
 
-  assert.ok(imageLine!.includes("f=32"), "Kitty sequence must declare f=32 (raw RGBA)");
-  assert.ok(imageLine!.includes("t=f"), "Kitty sequence must declare t=f (file transport)");
-  assert.ok(!imageLine!.includes("f=100"), "Kitty sequence must NOT declare f=100 (PNG)");
-  assert.ok(!imageLine!.includes("f=24"), "Kitty sequence must NOT declare f=24 (RGB)");
+  assert.ok(imageLine?.includes("f=32"), "Kitty sequence must declare f=32 (raw RGBA)");
+  assert.ok(imageLine?.includes("t=f"), "Kitty sequence must declare t=f (file transport)");
+  assert.ok(!imageLine?.includes("f=100"), "Kitty sequence must NOT declare f=100 (PNG)");
+  assert.ok(!imageLine?.includes("f=24"), "Kitty sequence must NOT declare f=24 (RGB)");
 
   component.dispose();
   renderer.destroy();
@@ -497,7 +499,9 @@ test("FramePayload routing: widget backend gets PNG, custom backend gets RGBA", 
       seenRgba.push({ bytes: rgba, w, h });
     },
     dispose() {},
-    __getImageId() { return undefined; },
+    __getImageId() {
+      return undefined;
+    },
   };
 
   const renderer = createRenderer(ctx, makeMockEmulator(), { frameRate: 30 });
@@ -524,8 +528,7 @@ test("FramePayload routing: widget backend gets PNG, custom backend gets RGBA", 
 
   // PNG magic = 0x89 0x50 0x4E 0x47. Assert the buffer does NOT start with it.
   assert.ok(
-    !(sample.bytes[0] === 0x89 && sample.bytes[1] === 0x50 &&
-      sample.bytes[2] === 0x4e && sample.bytes[3] === 0x47),
+    !(sample.bytes[0] === 0x89 && sample.bytes[1] === 0x50 && sample.bytes[2] === 0x4e && sample.bytes[3] === 0x47),
     "custom backend must receive raw RGBA, not PNG container bytes",
   );
 
@@ -545,8 +548,12 @@ test("destroy() disposes the inactive custom backend's component too", async () 
   let disposeCalls = 0;
   const component: GbaGameComponent = {
     acceptFrame() {},
-    dispose() { disposeCalls++; },
-    __getImageId() { return undefined; },
+    dispose() {
+      disposeCalls++;
+    },
+    __getImageId() {
+      return undefined;
+    },
   };
   renderer.setCustomComponent(component);
   assert.strictEqual(renderer.activeBackend(), "widget");

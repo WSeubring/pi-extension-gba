@@ -1,11 +1,10 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-
-import { registerAll } from "../src/commands.js";
-import type { CommandDeps } from "../src/commands.js";
-import type { Persistence } from "../src/persistence.js";
-import type { Lifecycle, RenderController } from "../src/lifecycle.js";
+import { test } from "node:test";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { CommandDeps } from "../src/commands.js";
+import { registerAll } from "../src/commands.js";
+import type { Lifecycle, RenderController } from "../src/lifecycle.js";
+import type { Persistence } from "../src/persistence.js";
 
 // ---- mock factories ----
 
@@ -46,12 +45,7 @@ function makeFakeCtx(): FakeCtx {
         notifyCalls.push({ message, type });
       },
       custom<T>(
-        factory: (
-          tui: unknown,
-          theme: unknown,
-          kb: unknown,
-          done: (result: T) => void,
-        ) => unknown,
+        factory: (tui: unknown, theme: unknown, kb: unknown, done: (result: T) => void) => unknown,
         _options?: unknown,
       ): Promise<T> {
         customCalled = true;
@@ -146,24 +140,15 @@ function makeFakePi(): {
   invokeCommand: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
   invokeGetCompletions: (prefix: string) => Promise<unknown>;
 } {
-  let registeredHandler:
-    | ((args: string, ctx: ExtensionCommandContext) => Promise<void>)
-    | null = null;
-  let registeredGetCompletions:
-    | ((prefix: string) => Promise<unknown> | unknown)
-    | null = null;
+  let registeredHandler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | null = null;
+  let registeredGetCompletions: ((prefix: string) => Promise<unknown> | unknown) | null = null;
 
   const pi = {
     registerCommand(
       _name: string,
       opts: {
-        handler: (
-          args: string,
-          ctx: ExtensionCommandContext,
-        ) => Promise<void>;
-        getArgumentCompletions?: (
-          prefix: string,
-        ) => Promise<unknown> | unknown;
+        handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+        getArgumentCompletions?: (prefix: string) => Promise<unknown> | unknown;
       },
     ) {
       registeredHandler = opts.handler;
@@ -223,16 +208,18 @@ function makeDeps(persistenceOverrides?: Partial<Persistence>): {
 
 test("/gba list — empty dir → warning, no picker", async () => {
   const { pi, invokeCommand } = makeFakePi();
-  const { deps } = makeDeps({ async listRoms() { return []; } });
+  const { deps } = makeDeps({
+    async listRoms() {
+      return [];
+    },
+  });
   const { ctx, notifyCalls, wasCustomCalled } = makeFakeCtx();
 
   registerAll(pi, deps);
   await invokeCommand("list", ctx);
 
   assert.ok(
-    notifyCalls.some(
-      (n) => n.message.includes("No ROMs in") && n.type === "warning",
-    ),
+    notifyCalls.some((n) => n.message.includes("No ROMs in") && n.type === "warning"),
     "should warn about empty ROM dir",
   );
   assert.equal(wasCustomCalled(), false, "picker must not be opened");
@@ -242,7 +229,9 @@ test("/gba list — 3 ROMs → picker shown; select a.gba → loadRom + onRomLoa
   const roms = ["a.gba", "b.gba", "c.gba"];
   const { pi, invokeCommand } = makeFakePi();
   const { deps, persistence, lifecycle } = makeDeps({
-    async listRoms() { return roms; },
+    async listRoms() {
+      return roms;
+    },
   });
   const { ctx, wasCustomCalled, notifyCalls, driveCustomDone } = makeFakeCtx();
 
@@ -268,7 +257,9 @@ test("/gba list — cancellation → loadRom NOT called", async () => {
   const roms = ["a.gba", "b.gba"];
   const { pi, invokeCommand } = makeFakePi();
   const { deps, persistence } = makeDeps({
-    async listRoms() { return roms; },
+    async listRoms() {
+      return roms;
+    },
   });
   const { ctx, driveCustomDone } = makeFakeCtx();
 
@@ -287,8 +278,12 @@ test("/gba reset — loaded ROM → clearState + loadRom(same) + onRomLoad", asy
   let clearStateCallCount = 0;
   const { pi, invokeCommand } = makeFakePi();
   const { deps, persistence, lifecycle } = makeDeps({
-    currentRom() { return "game.gba"; },
-    async clearState() { clearStateCallCount++; },
+    currentRom() {
+      return "game.gba";
+    },
+    async clearState() {
+      clearStateCallCount++;
+    },
   });
   const { ctx, notifyCalls } = makeFakeCtx();
 
@@ -308,8 +303,12 @@ test("/gba reset — no ROM loaded → warning, no clearState", async () => {
   let clearStateCalled = false;
   const { pi, invokeCommand } = makeFakePi();
   const { deps, persistence } = makeDeps({
-    currentRom() { return undefined; },
-    async clearState() { clearStateCalled = true; },
+    currentRom() {
+      return undefined;
+    },
+    async clearState() {
+      clearStateCalled = true;
+    },
   });
   const { ctx, notifyCalls } = makeFakeCtx();
 
@@ -317,11 +316,7 @@ test("/gba reset — no ROM loaded → warning, no clearState", async () => {
   await invokeCommand("reset", ctx);
 
   assert.ok(
-    notifyCalls.some(
-      (n) =>
-        n.type === "warning" &&
-        n.message === "No ROM loaded — run /gba first",
-    ),
+    notifyCalls.some((n) => n.type === "warning" && n.message === "No ROM loaded — run /gba first"),
     "warning about no ROM loaded",
   );
   assert.equal(clearStateCalled, false, "clearState must NOT be called");
@@ -332,7 +327,9 @@ test("/gba unknown.gba — not in list → error notify listing available", asyn
   const roms = ["a.gba", "b.gba", "c.gba"];
   const { pi, invokeCommand } = makeFakePi();
   const { deps, persistence } = makeDeps({
-    async listRoms() { return roms; },
+    async listRoms() {
+      return roms;
+    },
   });
   const { ctx, notifyCalls } = makeFakeCtx();
 
@@ -343,20 +340,19 @@ test("/gba unknown.gba — not in list → error notify listing available", asyn
   const errorNotify = notifyCalls.find((n) => n.type === "error");
   assert.ok(errorNotify, "error notify sent");
   assert.ok(
-    errorNotify!.message.includes("No such ROM"),
-    `error message should contain "No such ROM", got: ${errorNotify!.message}`,
+    errorNotify?.message.includes("No such ROM"),
+    `error message should contain "No such ROM", got: ${errorNotify?.message}`,
   );
-  assert.ok(
-    errorNotify!.message.includes("a.gba"),
-    "error message should list available ROMs",
-  );
+  assert.ok(errorNotify?.message.includes("a.gba"), "error message should list available ROMs");
 });
 
 test("/gba a.gba — valid ROM → loadRom + onRomLoad", async () => {
   const roms = ["a.gba", "b.gba"];
   const { pi, invokeCommand } = makeFakePi();
   const { deps, persistence, lifecycle } = makeDeps({
-    async listRoms() { return roms; },
+    async listRoms() {
+      return roms;
+    },
   });
   const { ctx, notifyCalls } = makeFakeCtx();
 
@@ -375,7 +371,9 @@ test("/gba <name with spaces> — full args used for ROM load, not first token",
   const roms = ["Pokemon - Emerald Version (USA).gba", "a.gba"];
   const { pi, invokeCommand } = makeFakePi();
   const { deps, persistence, lifecycle } = makeDeps({
-    async listRoms() { return roms; },
+    async listRoms() {
+      return roms;
+    },
   });
   const { ctx, notifyCalls } = makeFakeCtx();
 
@@ -388,17 +386,16 @@ test("/gba <name with spaces> — full args used for ROM load, not first token",
     "loadRom called with the full basename including spaces",
   );
   assert.equal(lifecycle.onRomLoadCalls, 1, "onRomLoad called");
-  assert.ok(
-    !notifyCalls.some((n) => n.type === "error"),
-    "no error notify for a ROM name containing spaces",
-  );
+  assert.ok(!notifyCalls.some((n) => n.type === "error"), "no error notify for a ROM name containing spaces");
 });
 
 test("/gba <name with spaces, no extension> — .gba appended to full args", async () => {
   const roms = ["Pokemon - Emerald Version (USA).gba"];
   const { pi, invokeCommand } = makeFakePi();
   const { deps, persistence } = makeDeps({
-    async listRoms() { return roms; },
+    async listRoms() {
+      return roms;
+    },
   });
   const { ctx } = makeFakeCtx();
 
@@ -416,7 +413,9 @@ test('getArgumentCompletions("") → [list, reset, ...roms]; ("re") → [reset]'
   const roms = ["pokemon-emerald.gba", "pokemon-ruby.gba"];
   const { pi, invokeGetCompletions } = makeFakePi();
   const { deps } = makeDeps({
-    async listRoms() { return roms; },
+    async listRoms() {
+      return roms;
+    },
   });
 
   registerAll(pi, deps);
@@ -424,18 +423,9 @@ test('getArgumentCompletions("") → [list, reset, ...roms]; ("re") → [reset]'
   const all = (await invokeGetCompletions("")) as { value: string }[];
   assert.ok(Array.isArray(all), "completions should be an array");
   const values = all.map((i: { value: string }) => i.value);
-  assert.ok(
-    values.indexOf("list") < values.indexOf("reset"),
-    "list before reset",
-  );
-  assert.ok(
-    values.indexOf("reset") < values.indexOf("pokemon-emerald.gba"),
-    "subs before ROMs",
-  );
-  assert.ok(
-    values.includes("pokemon-emerald.gba"),
-    "ROM included in completions",
-  );
+  assert.ok(values.indexOf("list") < values.indexOf("reset"), "list before reset");
+  assert.ok(values.indexOf("reset") < values.indexOf("pokemon-emerald.gba"), "subs before ROMs");
+  assert.ok(values.includes("pokemon-emerald.gba"), "ROM included in completions");
 
   const re = (await invokeGetCompletions("re")) as { value: string }[];
   assert.ok(Array.isArray(re), "completions for 're' should be an array");

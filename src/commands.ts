@@ -1,12 +1,19 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AudioPlayer } from "./audio.js";
+import type { GbaCapabilities } from "./capabilities.js";
+import type { GbaConfig } from "./config.js";
+import {
+  loadConfigFile,
+  normalize,
+  popQueuedWarning,
+  resetConfigFile,
+  resolveConfig,
+  saveConfigFile,
+} from "./config.js";
 import type { Emulator } from "./emulator.js";
 import { RomLoadError } from "./emulator.js";
-import type { Persistence } from "./persistence.js";
 import type { Lifecycle, RenderController } from "./lifecycle.js";
-import type { GbaConfig } from "./config.js";
-import { normalize, loadConfigFile, saveConfigFile, resetConfigFile, resolveConfig, popQueuedWarning } from "./config.js";
-import type { GbaCapabilities } from "./capabilities.js";
-import type { AudioPlayer } from "./audio.js";
+import type { Persistence } from "./persistence.js";
 import { showRomPicker } from "./picker.js";
 
 export interface CommandDeps {
@@ -54,19 +61,13 @@ async function cmdResume(ctx: ExtensionCommandContext, deps: CommandDeps): Promi
       ({ restoredState } = await deps.persistence.loadRom(last));
     } catch (err) {
       if (err instanceof RomLoadError) {
-        ctx.ui.notify(
-          `GBA: '${last}' is not a valid GBA ROM — ${err.message}`,
-          "error",
-        );
+        ctx.ui.notify(`GBA: '${last}' is not a valid GBA ROM — ${err.message}`, "error");
         return;
       }
       throw err;
     }
     deps.lifecycle.onRomLoad();
-    ctx.ui.notify(
-      `GBA: running ${last}${restoredState ? " (resumed)" : ""}`,
-      "info",
-    );
+    ctx.ui.notify(`GBA: running ${last}${restoredState ? " (resumed)" : ""}`, "info");
     await deps.enterGameMode?.(ctx);
     return;
   }
@@ -83,11 +84,7 @@ async function cmdList(ctx: ExtensionCommandContext, deps: CommandDeps): Promise
   await openPickerAndLoad(ctx, deps, roms);
 }
 
-async function openPickerAndLoad(
-  ctx: ExtensionCommandContext,
-  deps: CommandDeps,
-  roms: string[],
-): Promise<void> {
+async function openPickerAndLoad(ctx: ExtensionCommandContext, deps: CommandDeps, roms: string[]): Promise<void> {
   const result = await showRomPicker(ctx, roms);
   if (result.cancelled || !result.basename) return;
   const basename = result.basename;
@@ -99,19 +96,13 @@ async function openPickerAndLoad(
     restoredState = loaded.restoredState;
   } catch (err) {
     if (err instanceof RomLoadError) {
-      ctx.ui.notify(
-        `GBA: '${basename}' is not a valid GBA ROM — ${err.message}`,
-        "error",
-      );
+      ctx.ui.notify(`GBA: '${basename}' is not a valid GBA ROM — ${err.message}`, "error");
       return;
     }
     throw err;
   }
   deps.lifecycle.onRomLoad();
-  ctx.ui.notify(
-    `GBA: running ${romPath.split("/").pop() ?? basename}${restoredState ? " (resumed)" : ""}`,
-    "info",
-  );
+  ctx.ui.notify(`GBA: running ${romPath.split("/").pop() ?? basename}${restoredState ? " (resumed)" : ""}`, "info");
   await deps.enterGameMode?.(ctx);
 }
 
@@ -128,10 +119,7 @@ async function cmdReset(ctx: ExtensionCommandContext, deps: CommandDeps): Promis
   try {
     await deps.persistence.clearState();
   } catch (err) {
-    ctx.ui.notify(
-      `GBA: reset failed — ${String((err as Error).message ?? err)}`,
-      "error",
-    );
+    ctx.ui.notify(`GBA: reset failed — ${String((err as Error).message ?? err)}`, "error");
     return;
   }
 
@@ -150,22 +138,15 @@ async function cmdReset(ctx: ExtensionCommandContext, deps: CommandDeps): Promis
   await deps.enterGameMode?.(ctx);
 }
 
-async function cmdLoadByName(
-  ctx: ExtensionCommandContext,
-  deps: CommandDeps,
-  token: string,
-): Promise<void> {
+async function cmdLoadByName(ctx: ExtensionCommandContext, deps: CommandDeps, token: string): Promise<void> {
   deps.ensureRender(ctx);
-  const basename = token.endsWith(".gba") ? token : token + ".gba";
+  const basename = token.endsWith(".gba") ? token : `${token}.gba`;
 
   const roms = await deps.persistence.listRoms();
   if (!roms.includes(basename)) {
     const available = roms.slice(0, 5).join(", ");
     const ellipsis = roms.length > 5 ? " …" : "";
-    ctx.ui.notify(
-      `No such ROM: '${basename}'. Available: ${available}${ellipsis}`,
-      "error",
-    );
+    ctx.ui.notify(`No such ROM: '${basename}'. Available: ${available}${ellipsis}`, "error");
     return;
   }
 
@@ -177,20 +158,14 @@ async function cmdLoadByName(
     restoredState = result.restoredState;
   } catch (err) {
     if (err instanceof RomLoadError) {
-      ctx.ui.notify(
-        `GBA: '${basename}' is not a valid GBA ROM — ${err.message}`,
-        "error",
-      );
+      ctx.ui.notify(`GBA: '${basename}' is not a valid GBA ROM — ${err.message}`, "error");
       return;
     }
     throw err;
   }
 
   deps.lifecycle.onRomLoad();
-  ctx.ui.notify(
-    `GBA: running ${romPath.split("/").pop() ?? basename}${restoredState ? " (resumed)" : ""}`,
-    "info",
-  );
+  ctx.ui.notify(`GBA: running ${romPath.split("/").pop() ?? basename}${restoredState ? " (resumed)" : ""}`, "info");
   await deps.enterGameMode?.(ctx);
 }
 
@@ -200,10 +175,7 @@ async function cmdLoadByName(
  * Interactive config menu via ctx.ui.select / ctx.ui.input.
  * Loops until the user picks "Close" or dismisses.
  */
-export async function handleConfig(
-  ctx: ExtensionCommandContext,
-  deps: CommandDeps,
-): Promise<void> {
+export async function handleConfig(ctx: ExtensionCommandContext, deps: CommandDeps): Promise<void> {
   // Work on a mutable copy so we can accumulate changes before save.
   // The live deps.cfg object is updated via Object.assign after each save.
   const cfg = deps.cfg;
@@ -234,12 +206,8 @@ export async function handleConfig(
       if (val === undefined) continue;
       cfg.autoFocusOnAgentStart = val === "on";
       await _saveAndNotify(ctx, deps, cfg, "autoFocusOnAgentStart", val);
-
     } else if (pick.startsWith("Auto-focus debounce")) {
-      const val = await ctx.ui.input(
-        "Auto-focus debounce (ms, 0–5000)",
-        String(cfg.autoFocusDebounceMs),
-      );
+      const val = await ctx.ui.input("Auto-focus debounce (ms, 0–5000)", String(cfg.autoFocusDebounceMs));
       if (val === undefined) continue;
       // Number("") is 0 — reject empty/whitespace input explicitly so a bare
       // Enter doesn't silently save autoFocusDebounceMs=0.
@@ -250,19 +218,16 @@ export async function handleConfig(
       }
       cfg.autoFocusDebounceMs = Math.max(0, Math.min(5000, Math.round(num)));
       await _saveAndNotify(ctx, deps, cfg, "autoFocusDebounceMs", String(cfg.autoFocusDebounceMs));
-
     } else if (pick.startsWith("Auto-run on agent_start")) {
       const val = await ctx.ui.select("Auto-run on agent_start", ["on", "off"]);
       if (val === undefined) continue;
       cfg.autoRunOnAgentStart = val === "on";
       await _saveAndNotify(ctx, deps, cfg, "autoRunOnAgentStart", val);
-
     } else if (pick.startsWith("Auto-hide on agent_end")) {
       const val = await ctx.ui.select("Auto-hide on agent_end", ["on", "off"]);
       if (val === undefined) continue;
       cfg.autoHideOnAgentEnd = val === "on";
       await _saveAndNotify(ctx, deps, cfg, "autoHideOnAgentEnd", val);
-
     } else if (pick.startsWith("Scale")) {
       const val = await ctx.ui.select("Scale", ["1x", "2x", "3x"]);
       if (val === undefined) continue;
@@ -271,12 +236,8 @@ export async function handleConfig(
       cfg.scale = newScale;
       await _saveAndNotify(ctx, deps, cfg, "scale", val);
       ctx.ui.notify("GBA config: scale change requires restart to take effect", "info");
-
     } else if (pick.startsWith("Frame rate")) {
-      const val = await ctx.ui.input(
-        "Frame rate (fps, 1–30)",
-        String(cfg.frameRate),
-      );
+      const val = await ctx.ui.input("Frame rate (fps, 1–30)", String(cfg.frameRate));
       if (val === undefined) continue;
       const num = Number(val);
       if (!Number.isFinite(num) || num < 1) {
@@ -286,18 +247,13 @@ export async function handleConfig(
       cfg.frameRate = Math.max(1, Math.min(30, Math.round(num)));
       await _saveAndNotify(ctx, deps, cfg, "frameRate", String(cfg.frameRate));
       ctx.ui.notify("GBA config: frameRate change requires restart to take effect", "info");
-
     } else if (pick.startsWith("Audio")) {
       const val = await ctx.ui.select("Audio", ["on", "off"]);
       if (val === undefined) continue;
       cfg.audio = val === "on";
       await _saveAndNotify(ctx, deps, cfg, "audio", val);
-
     } else if (pick.startsWith("Reset all")) {
-      const confirmed = await ctx.ui.confirm(
-        "Reset GBA config",
-        "Reset all settings to defaults?",
-      );
+      const confirmed = await ctx.ui.confirm("Reset GBA config", "Reset all settings to defaults?");
       if (!confirmed) continue;
       const prevRomDir = cfg.romDir;
       await resetConfigFile();
@@ -359,9 +315,7 @@ async function buildCompletions(
   const p = argumentPrefix.toLowerCase();
   const matches = [
     ...subs.filter((s) => s.value.startsWith(p)),
-    ...roms
-      .filter((r) => r.toLowerCase().startsWith(p))
-      .map((r) => ({ value: r, label: r })),
+    ...roms.filter((r) => r.toLowerCase().startsWith(p)).map((r) => ({ value: r, label: r })),
   ];
   return matches.length ? matches : null;
 }
@@ -404,20 +358,14 @@ export function registerAll(pi: ExtensionAPI, deps: CommandDeps): void {
           await cmdReset(ctx, deps);
         } else if (token === "mute") {
           if (!deps.audio) {
-            ctx.ui.notify(
-              "GBA: audio not enabled — set PI_GBA_AUDIO=1 or enable via /gba config",
-              "warning",
-            );
+            ctx.ui.notify("GBA: audio not enabled — set PI_GBA_AUDIO=1 or enable via /gba config", "warning");
             return;
           }
           deps.audio.mute();
           ctx.ui.notify("GBA: audio muted", "info");
         } else if (token === "unmute") {
           if (!deps.audio) {
-            ctx.ui.notify(
-              "GBA: audio not enabled — set PI_GBA_AUDIO=1 or enable via /gba config",
-              "warning",
-            );
+            ctx.ui.notify("GBA: audio not enabled — set PI_GBA_AUDIO=1 or enable via /gba config", "warning");
             return;
           }
           deps.audio.unmute();
@@ -442,10 +390,7 @@ export function registerAll(pi: ExtensionAPI, deps: CommandDeps): void {
         }
       } catch (err) {
         console.warn("[pi-extension-gba] /gba handler threw:", err);
-        ctx.ui.notify(
-          `GBA: ${String((err as Error).message ?? err)}`,
-          "error",
-        );
+        ctx.ui.notify(`GBA: ${String((err as Error).message ?? err)}`, "error");
       }
     },
   });

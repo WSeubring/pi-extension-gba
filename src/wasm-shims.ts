@@ -17,12 +17,12 @@ export function installWasmShims(): void {
   // IDBFS mounts /data and /autosave via FSInit and calls indexedDB.open().
   // We provide a minimal in-memory stub so IDBFS initialises cleanly (with an
   // empty "remote" store) and proceeds to create the VFS directories it needs.
-  if (typeof (globalThis as Record<string, unknown>)["indexedDB"] === "undefined") {
+  if (typeof (globalThis as Record<string, unknown>).indexedDB === "undefined") {
     function makeFakeCursorRequest(): Record<string, unknown> {
       const req: Record<string, unknown> = { onsuccess: null, onerror: null, result: null };
       Promise.resolve().then(() => {
-        if (typeof req["onsuccess"] === "function") {
-          (req["onsuccess"] as (e: unknown) => void)({ target: { result: null } });
+        if (typeof req.onsuccess === "function") {
+          (req.onsuccess as (e: unknown) => void)({ target: { result: null } });
         }
       });
       return req;
@@ -39,8 +39,8 @@ export function installWasmShims(): void {
     function makeFakeSuccessRequest(): Record<string, unknown> {
       const req: Record<string, unknown> = { onsuccess: null, onerror: null, result: undefined };
       Promise.resolve().then(() => {
-        if (typeof req["onsuccess"] === "function") {
-          (req["onsuccess"] as (e: unknown) => void)({ target: { result: undefined } });
+        if (typeof req.onsuccess === "function") {
+          (req.onsuccess as (e: unknown) => void)({ target: { result: undefined } });
         }
       });
       return req;
@@ -73,11 +73,13 @@ export function installWasmShims(): void {
       };
       // Fire oncomplete after the per-request microtasks so IDBFS.reconcile
       // (which reports success via transaction.oncomplete) finishes cleanly.
-      Promise.resolve().then(() => Promise.resolve()).then(() => {
-        if (typeof txn["oncomplete"] === "function") {
-          (txn["oncomplete"] as (e: unknown) => void)({ target: txn });
-        }
-      });
+      Promise.resolve()
+        .then(() => Promise.resolve())
+        .then(() => {
+          if (typeof txn.oncomplete === "function") {
+            (txn.oncomplete as (e: unknown) => void)({ target: txn });
+          }
+        });
       return txn;
     }
 
@@ -88,11 +90,13 @@ export function installWasmShims(): void {
         transaction(_storeNames: unknown, _mode?: string): Record<string, unknown> {
           return makeFakeTransaction(store);
         },
-        close(): void { /* no-op */ },
+        close(): void {
+          /* no-op */
+        },
       };
     }
 
-    (globalThis as Record<string, unknown>)["indexedDB"] = {
+    (globalThis as Record<string, unknown>).indexedDB = {
       open(_name: string, _version?: number): Record<string, unknown> {
         const db = makeFakeDatabase();
         const req: Record<string, unknown> = {
@@ -102,8 +106,8 @@ export function installWasmShims(): void {
           result: db,
         };
         Promise.resolve().then(() => {
-          if (typeof req["onsuccess"] === "function") {
-            (req["onsuccess"] as () => void)();
+          if (typeof req.onsuccess === "function") {
+            (req.onsuccess as () => void)();
           }
         });
         return req;

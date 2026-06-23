@@ -2,9 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import type { Emulator } from "./emulator.js";
 import type { GbaButton } from "./types.js";
 
-const GBA_BUTTONS: GbaButton[] = [
-  "up", "down", "left", "right", "a", "b", "l", "r", "start", "select",
-];
+const GBA_BUTTONS: GbaButton[] = ["up", "down", "left", "right", "a", "b", "l", "r", "start", "select"];
 
 // Minimal interface lifecycle consumes from Phase 2's RenderController.
 // Phase 2's RenderController is a superset; this interface is the contract.
@@ -103,15 +101,13 @@ export function createLifecycle(
       try {
         await opts.onPause();
       } catch (err) {
-        log("[pi-extension-gba] onPause: " + String(err));
+        log(`[pi-extension-gba] onPause: ${String(err)}`);
       }
     }
   }
 
   emulator.onCrash((err) => {
-    opts.logger?.(
-      `[pi-extension-gba] GBA crashed — try /gba reset: ${err.message}`,
-    );
+    opts.logger?.(`[pi-extension-gba] GBA crashed — try /gba reset: ${err.message}`);
     crashed = true;
     state = "Paused";
     manualOverride = true;
@@ -142,10 +138,7 @@ export function createLifecycle(
           if (manualOverride) return;
           goRunning();
         } catch (err) {
-          ctx.ui.notify(
-            `GBA lifecycle error: ${String((err as Error).message ?? err)}`,
-            "error",
-          );
+          ctx.ui.notify(`GBA lifecycle error: ${String((err as Error).message ?? err)}`, "error");
           log(`[pi-extension-gba] agent_start handler threw: ${String(err)}`);
         }
       });
@@ -157,10 +150,7 @@ export function createLifecycle(
           if (manualOverride) return;
           await goPaused();
         } catch (err) {
-          ctx.ui.notify(
-            `GBA lifecycle error: ${String((err as Error).message ?? err)}`,
-            "error",
-          );
+          ctx.ui.notify(`GBA lifecycle error: ${String((err as Error).message ?? err)}`, "error");
           log(`[pi-extension-gba] agent_end handler threw: ${String(err)}`);
         }
       });
@@ -172,13 +162,8 @@ export function createLifecycle(
             if (!attached) return;
             lifecycle.manualPauseToggle();
           } catch (err) {
-            ctx.ui.notify(
-              `GBA lifecycle error: ${String((err as Error).message ?? err)}`,
-              "error",
-            );
-            log(
-              `[pi-extension-gba] alt+shift+g handler threw: ${String(err)}`,
-            );
+            ctx.ui.notify(`GBA lifecycle error: ${String((err as Error).message ?? err)}`, "error");
+            log(`[pi-extension-gba] alt+shift+g handler threw: ${String(err)}`);
           }
         },
       });

@@ -1,6 +1,6 @@
+import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import type { ChildProcess, SpawnOptions } from "node:child_process";
 
 // ---------------------------------------------------------------------------
 // Test seam — spawn factory (overridden in tests via __setSpawnForTest)
@@ -86,7 +86,20 @@ function buildSpawnArgs(backend: AudioBackend): { cmd: string; args: string[] } 
     case "ffplay":
       return {
         cmd: "ffplay",
-        args: ["-nodisp", "-autoexit", "-loglevel", "error", "-f", "s16le", "-ar", rate, "-ch_layout", "stereo", "-i", "-"],
+        args: [
+          "-nodisp",
+          "-autoexit",
+          "-loglevel",
+          "error",
+          "-f",
+          "s16le",
+          "-ar",
+          rate,
+          "-ch_layout",
+          "stereo",
+          "-i",
+          "-",
+        ],
       };
     case "aplay":
       return {
@@ -184,9 +197,7 @@ class AudioPlayerImpl extends EventEmitter implements AudioPlayer {
       // code OR a signal death (code===null, signal set — e.g. external
       // SIGKILL) is a crash the user must hear about.
       if (this.#stopping || (code === 0 && signal === null)) return;
-      fireCrash(new Error(
-        `audio backend (${this.#backend}) exited code=${code} signal=${signal}`,
-      ));
+      fireCrash(new Error(`audio backend (${this.#backend}) exited code=${code} signal=${signal}`));
     });
 
     // Wait until stdin is writable. For pipe stdio, the stream is writable
@@ -217,9 +228,7 @@ class AudioPlayerImpl extends EventEmitter implements AudioPlayer {
     if (this.#proc.stdin.writableLength > BACKPRESSURE_THRESHOLD) {
       if (!this.#backpressureWarnedThisSession) {
         this.#backpressureWarnedThisSession = true;
-        this.#logger(
-          "[pi-extension-gba] audio stdin buffer full — subprocess may be wedged; dropping audio chunks",
-        );
+        this.#logger("[pi-extension-gba] audio stdin buffer full — subprocess may be wedged; dropping audio chunks");
       }
       return;
     }
@@ -279,15 +288,27 @@ class AudioPlayerImpl extends EventEmitter implements AudioPlayer {
       // Drain stdin then SIGTERM
       if (proc.stdin && !proc.stdin.destroyed) {
         proc.stdin.end(() => {
-          try { proc.kill("SIGTERM"); } catch { /* already dead */ }
+          try {
+            proc.kill("SIGTERM");
+          } catch {
+            /* already dead */
+          }
         });
       } else {
-        try { proc.kill("SIGTERM"); } catch { /* already dead */ }
+        try {
+          proc.kill("SIGTERM");
+        } catch {
+          /* already dead */
+        }
       }
 
       // 200 ms SIGKILL fallback
       const sigkillTimer = setTimeout(() => {
-        try { proc.kill("SIGKILL"); } catch { /* already dead */ }
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          /* already dead */
+        }
         // Final escape hatch: a child stuck in uninterruptible I/O survives
         // even SIGKILL, and stop() pending forever would block the caller's
         // game→chat teardown. State is already detached above, so resolving
@@ -346,9 +367,7 @@ export function audioEnabled(cfgAudio: boolean): boolean {
  *   - opts.backend === undefined (no probed tool — L9).
  * Otherwise returns a player in "idle" state (start() must be called).
  */
-export function createAudioPlayer(
-  opts: AudioOpts & { cfgAudio: boolean },
-): AudioPlayer | undefined {
+export function createAudioPlayer(opts: AudioOpts & { cfgAudio: boolean }): AudioPlayer | undefined {
   if (!audioEnabled(opts.cfgAudio)) return undefined;
   if (opts.backend === undefined) return undefined;
 

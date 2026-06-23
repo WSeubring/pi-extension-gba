@@ -1,12 +1,6 @@
-import type {
-  KeyId,
-} from "@mariozechner/pi-tui";
-import {
-  isKeyRelease,
-  isKeyRepeat,
-  matchesKey,
-} from "@mariozechner/pi-tui";
-import type { ButtonSink, GbaButton } from "./types.js";
+import type { KeyId } from "@mariozechner/pi-tui";
+import { isKeyRelease, isKeyRepeat, matchesKey } from "@mariozechner/pi-tui";
+import type { GbaButton } from "./types.js";
 
 const KEY_MAP: ReadonlyArray<readonly [KeyId, GbaButton]> = [
   ["up", "up"],

@@ -5,11 +5,7 @@
  * extension makes and exposes helpers for test-side triggering.
  */
 
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ExtensionCommandContext,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 // ---------------------------------------------------------------------------
 // Recorded call types
@@ -47,11 +43,7 @@ export interface MockPi {
 
   // --- Test-side triggers ---
   /** Trigger all handlers for the named event with optional data + ctx. */
-  emit(
-    event: string,
-    data?: unknown,
-    ctx?: ExtensionContext,
-  ): Promise<void>;
+  emit(event: string, data?: unknown, ctx?: ExtensionContext): Promise<void>;
 
   /**
    * Fire the handler registered for keyId with the supplied ctx.
@@ -63,11 +55,7 @@ export interface MockPi {
    * Invoke the registered command handler.
    * Throws if no command with that name was registered.
    */
-  invokeCommand(
-    name: string,
-    args: string,
-    ctx: ExtensionCommandContext,
-  ): Promise<void>;
+  invokeCommand(name: string, args: string, ctx: ExtensionCommandContext): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,26 +93,44 @@ export function createMockPi(): MockPi {
     // Stub methods not needed for our scenarios — return safe defaults.
     registerTool() {},
     registerFlag() {},
-    getFlag() { return undefined; },
+    getFlag() {
+      return undefined;
+    },
     registerMessageRenderer() {},
     sendMessage() {},
     sendUserMessage() {},
     appendEntry() {},
     setSessionName() {},
-    getSessionName() { return undefined; },
+    getSessionName() {
+      return undefined;
+    },
     setLabel() {},
-    async exec() { return { code: 0, stdout: "", stderr: "" }; },
-    getActiveTools() { return []; },
-    getAllTools() { return []; },
+    async exec() {
+      return { code: 0, stdout: "", stderr: "" };
+    },
+    getActiveTools() {
+      return [];
+    },
+    getAllTools() {
+      return [];
+    },
     setActiveTools() {},
-    getCommands() { return []; },
-    async setModel() { return false; },
-    getThinkingLevel() { return "none" as const; },
+    getCommands() {
+      return [];
+    },
+    async setModel() {
+      return false;
+    },
+    getThinkingLevel() {
+      return "none" as const;
+    },
     setThinkingLevel() {},
     registerProvider() {},
     unregisterProvider() {},
     events: {
-      on() { return () => {}; },
+      on() {
+        return () => {};
+      },
       off() {},
       emit() {},
     },

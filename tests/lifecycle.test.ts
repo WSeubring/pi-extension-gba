@@ -1,26 +1,31 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-
-import { createLifecycle } from "../src/lifecycle.js";
-import type { RenderController, LifecycleOptions } from "../src/lifecycle.js";
+import { test } from "node:test";
+import type { AgentEndEvent, AgentStartEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Emulator } from "../src/emulator.js";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  AgentStartEvent,
-  AgentEndEvent,
-} from "@mariozechner/pi-coding-agent";
+import type { LifecycleOptions, RenderController } from "../src/lifecycle.js";
+import { createLifecycle } from "../src/lifecycle.js";
+import { defined } from "./harness/assert.js";
 
 // ---- mock factories ----
 
 function makeMockRender(): { render: RenderController; calls: string[] } {
   const calls: string[] = [];
   const render: RenderController = {
-    start() { calls.push("start"); },
-    stop() { calls.push("stop"); },
-    shrink() { calls.push("shrink"); },
-    expand() { calls.push("expand"); },
-    hide() { calls.push("hide"); },
+    start() {
+      calls.push("start");
+    },
+    stop() {
+      calls.push("stop");
+    },
+    shrink() {
+      calls.push("shrink");
+    },
+    expand() {
+      calls.push("expand");
+    },
+    hide() {
+      calls.push("hide");
+    },
   };
   return { render, calls };
 }
@@ -33,13 +38,21 @@ function makeMockEmulator(): {
   let crashCb: ((err: Error) => void) | null = null;
   const releaseCalls: string[] = [];
   const emulator = {
-    onCrash(cb: (err: Error) => void) { crashCb = cb; },
-    release(button: string) { releaseCalls.push(button); },
-    saveState() { return new Uint8Array(0); },
+    onCrash(cb: (err: Error) => void) {
+      crashCb = cb;
+    },
+    release(button: string) {
+      releaseCalls.push(button);
+    },
+    saveState() {
+      return new Uint8Array(0);
+    },
   } as unknown as Emulator;
   return {
     emulator,
-    triggerCrash(err: Error) { if (crashCb) crashCb(err); },
+    triggerCrash(err: Error) {
+      if (crashCb) crashCb(err);
+    },
     releaseCalls,
   };
 }
@@ -131,7 +144,11 @@ test("manual override sticks: manualPauseToggle blocks agent_start", async () =>
 
   // agent_end should be a no-op because manualOverride = true
   await fire("agent_end");
-  assert.deepEqual(calls, ["start", "expand", "stop", "shrink", "start", "expand"], "agent_end is no-op after manual override");
+  assert.deepEqual(
+    calls,
+    ["start", "expand", "stop", "shrink", "start", "expand"],
+    "agent_end is no-op after manual override",
+  );
 });
 
 test("autorun gating: autoRunOnAgentStart=false blocks agent_start transition", async () => {
@@ -189,11 +206,11 @@ test("crash handler logs via opts.logger", () => {
 
   assert.equal(loggerCalls.length, 1, "logger called exactly once on crash");
   assert.ok(
-    loggerCalls[0]!.includes("GBA crashed"),
+    loggerCalls[0]?.includes("GBA crashed"),
     `logger message must contain "GBA crashed", got: ${loggerCalls[0]}`,
   );
   assert.ok(
-    loggerCalls[0]!.includes(syntheticError.message),
+    loggerCalls[0]?.includes(syntheticError.message),
     `logger message must contain the error message, got: ${loggerCalls[0]}`,
   );
 });
@@ -275,7 +292,7 @@ test("goPaused: state flips before onPause I/O — resume during a slow onPause 
   assert.equal(lifecycle.isRunning(), true, "resume() during onPause goes Running");
 
   // The late onPause completion must NOT clobber Running back to Paused.
-  resolveOnPause!();
+  defined(resolveOnPause, "resolveOnPause")();
   await endPromise;
   assert.equal(lifecycle.isRunning(), true, "late onPause completion must not overwrite Running");
 });

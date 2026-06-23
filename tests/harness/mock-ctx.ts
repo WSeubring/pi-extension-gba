@@ -5,12 +5,8 @@
  * with inspectable call records and scripted answers for ui.select / ui.input.
  */
 
-import type {
-  ExtensionContext,
-  ExtensionCommandContext,
-} from "@mariozechner/pi-coding-agent";
-import type { TUI } from "@mariozechner/pi-tui";
-import type { Component } from "@mariozechner/pi-tui";
+import type { ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { Component, TUI } from "@mariozechner/pi-tui";
 
 // ---------------------------------------------------------------------------
 // Recorded UI calls
@@ -62,7 +58,15 @@ function createMockTUI(rows = 40, cols = 80): MockTUIHandle {
     },
   } as unknown as TUI;
 
-  return { tui, get renderCount() { return renderCount; }, written, rows, cols };
+  return {
+    tui,
+    get renderCount() {
+      return renderCount;
+    },
+    written,
+    rows,
+    cols,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -103,8 +107,12 @@ export function createMockCtx(): MockCtx {
 
   // Minimal theme stub needed by showRomPicker → themeAdapter
   const theme = {
-    fg(_name: string, text: string) { return text; },
-    bg(_name: string, text: string) { return text; },
+    fg(_name: string, text: string) {
+      return text;
+    },
+    bg(_name: string, text: string) {
+      return text;
+    },
   } as unknown as import("@mariozechner/pi-coding-agent").ExtensionContext["ui"]["theme"];
 
   // Minimal keybindings stub
@@ -191,12 +199,24 @@ export function createMockCtx(): MockCtx {
     setTitle() {},
     pasteToEditor() {},
     setEditorText() {},
-    getEditorText() { return ""; },
-    async editor() { return undefined; },
-    getAllThemes() { return []; },
-    getTheme() { return undefined; },
-    setTheme() { return { success: false }; },
-    getToolsExpanded() { return false; },
+    getEditorText() {
+      return "";
+    },
+    async editor() {
+      return undefined;
+    },
+    getAllThemes() {
+      return [];
+    },
+    getTheme() {
+      return undefined;
+    },
+    setTheme() {
+      return { success: false };
+    },
+    getToolsExpanded() {
+      return false;
+    },
     setToolsExpanded() {},
 
     theme,
@@ -209,20 +229,36 @@ export function createMockCtx(): MockCtx {
     sessionManager: {} as ExtensionCommandContext["sessionManager"],
     modelRegistry: {} as ExtensionCommandContext["modelRegistry"],
     model: undefined,
-    isIdle() { return true; },
+    isIdle() {
+      return true;
+    },
     signal: undefined,
     abort() {},
-    hasPendingMessages() { return false; },
+    hasPendingMessages() {
+      return false;
+    },
     shutdown() {},
-    getContextUsage() { return undefined; },
+    getContextUsage() {
+      return undefined;
+    },
     compact() {},
-    getSystemPrompt() { return ""; },
+    getSystemPrompt() {
+      return "";
+    },
     // ExtensionCommandContext extras
     async waitForIdle() {},
-    async newSession() { return { cancelled: false }; },
-    async fork() { return { cancelled: false }; },
-    async navigateTree() { return { cancelled: false }; },
-    async switchSession() { return { cancelled: false }; },
+    async newSession() {
+      return { cancelled: false };
+    },
+    async fork() {
+      return { cancelled: false };
+    },
+    async navigateTree() {
+      return { cancelled: false };
+    },
+    async switchSession() {
+      return { cancelled: false };
+    },
     async reload() {},
   } as unknown as ExtensionCommandContext;
 

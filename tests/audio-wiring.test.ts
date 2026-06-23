@@ -1,20 +1,21 @@
+import { defined } from "./harness/assert.js";
 /**
  * Phase 8c — Audio wiring tests.
  * Covers: render tick pulls samples, mute/unmute commands, alt+m shortcut,
  * audio=undefined silent path.
  */
-import { test } from "node:test";
-import assert from "node:assert/strict";
 
-import { createRenderer, type EmulatorLike } from "../src/render.js";
-import { registerAll, type CommandDeps } from "../src/commands.js";
-import { createAutoFocus, type AutoFocusDeps } from "../src/auto-focus.js";
-import type { AudioPlayer } from "../src/audio.js";
+import assert from "node:assert/strict";
+import { test } from "node:test";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { RenderControllerWithSwap } from "../src/render.js";
-import type { Persistence } from "../src/persistence.js";
-import type { Lifecycle } from "../src/lifecycle.js";
+import type { AudioPlayer } from "../src/audio.js";
+import { type AutoFocusDeps, createAutoFocus } from "../src/auto-focus.js";
+import { type CommandDeps, registerAll } from "../src/commands.js";
 import type { GbaConfig } from "../src/config.js";
+import type { Lifecycle } from "../src/lifecycle.js";
+import type { Persistence } from "../src/persistence.js";
+import type { RenderControllerWithSwap } from "../src/render.js";
+import { createRenderer, type EmulatorLike } from "../src/render.js";
 
 // ---------------------------------------------------------------------------
 // Mock audio player
@@ -92,8 +93,12 @@ function makeAudioEmulator(samples: Int16Array): EmulatorLike & { getAudioSample
   const buf = new Uint8Array(240 * 160 * 4).fill(128);
   return {
     step() {},
-    getFramebuffer() { return buf.slice(); },
-    getAudioSamples(_max: number) { return samples; },
+    getFramebuffer() {
+      return buf.slice();
+    },
+    getAudioSamples(_max: number) {
+      return samples;
+    },
   };
 }
 
@@ -101,7 +106,9 @@ function makeNoAudioEmulator(): EmulatorLike {
   const buf = new Uint8Array(240 * 160 * 4).fill(128);
   return {
     step() {},
-    getFramebuffer() { return buf.slice(); },
+    getFramebuffer() {
+      return buf.slice();
+    },
     // deliberately no getAudioSamples
   };
 }
@@ -133,10 +140,14 @@ test("render tick: getAudioSamples called + writeSamples forwarded for non-empty
   const audio = makeMockAudio();
   const { ctx } = makeMockCtx();
 
-  const renderer = createRenderer(ctx as unknown as import("@mariozechner/pi-coding-agent").ExtensionContext, emulator, {
-    frameRate: 30,
-    audio,
-  });
+  const renderer = createRenderer(
+    ctx as unknown as import("@mariozechner/pi-coding-agent").ExtensionContext,
+    emulator,
+    {
+      frameRate: 30,
+      audio,
+    },
+  );
   renderer.setWidgetLiveTick(true);
   renderer.start();
   await new Promise((r) => setTimeout(r, 80));
@@ -156,10 +167,14 @@ test("render tick: empty chunk → writeSamples NOT called", async () => {
   const audio = makeMockAudio();
   const { ctx } = makeMockCtx();
 
-  const renderer = createRenderer(ctx as unknown as import("@mariozechner/pi-coding-agent").ExtensionContext, emulator, {
-    frameRate: 30,
-    audio,
-  });
+  const renderer = createRenderer(
+    ctx as unknown as import("@mariozechner/pi-coding-agent").ExtensionContext,
+    emulator,
+    {
+      frameRate: 30,
+      audio,
+    },
+  );
   renderer.setWidgetLiveTick(true);
   renderer.start();
   await new Promise((r) => setTimeout(r, 80));
@@ -183,10 +198,14 @@ test("render tick: audio=undefined silent path — no throw, tick proceeds norma
   };
 
   const { ctx } = makeMockCtx();
-  const renderer = createRenderer(ctx as unknown as import("@mariozechner/pi-coding-agent").ExtensionContext, emulatorWithSpy, {
-    frameRate: 30,
-    // audio intentionally omitted → silent mode
-  });
+  const renderer = createRenderer(
+    ctx as unknown as import("@mariozechner/pi-coding-agent").ExtensionContext,
+    emulatorWithSpy,
+    {
+      frameRate: 30,
+      // audio intentionally omitted → silent mode
+    },
+  );
   renderer.setWidgetLiveTick(true);
 
   const errors: unknown[] = [];
@@ -209,10 +228,14 @@ test("render tick: emulator lacks getAudioSamples + audio provided → no throw"
   const audio = makeMockAudio();
   const { ctx } = makeMockCtx();
 
-  const renderer = createRenderer(ctx as unknown as import("@mariozechner/pi-coding-agent").ExtensionContext, emulator, {
-    frameRate: 30,
-    audio,
-  });
+  const renderer = createRenderer(
+    ctx as unknown as import("@mariozechner/pi-coding-agent").ExtensionContext,
+    emulator,
+    {
+      frameRate: 30,
+      audio,
+    },
+  );
   renderer.setWidgetLiveTick(true);
 
   const errors: unknown[] = [];
@@ -255,25 +278,47 @@ function makeFakeDeps(audio: AudioPlayer | undefined): CommandDeps {
   return {
     emulator: {} as never,
     persistence: {
-      async loadRom(b) { return { romPath: b, restoredState: false }; },
+      async loadRom(b) {
+        return { romPath: b, restoredState: false };
+      },
       async snapshot() {},
       async flushPending() {},
-      async listRoms() { return []; },
-      async lastPlayed() { return undefined; },
-      currentRom() { return undefined; },
+      async listRoms() {
+        return [];
+      },
+      async lastPlayed() {
+        return undefined;
+      },
+      currentRom() {
+        return undefined;
+      },
       async clearState() {},
       destroy() {},
     } as Persistence,
     lifecycle: {
-      attach() {}, detach() {}, manualPauseToggle() {},
-      isRunning() { return false; },
-      onRomLoad() {}, isCrashed() { return false; }, acknowledgeCrash() {},
+      attach() {},
+      detach() {},
+      manualPauseToggle() {},
+      isRunning() {
+        return false;
+      },
+      onRomLoad() {},
+      isCrashed() {
+        return false;
+      },
+      acknowledgeCrash() {},
     } as Lifecycle,
     ensureRender: () => ({ start() {}, stop() {}, shrink() {}, expand() {}, hide() {} }),
     cfg: {
-      version: 1, romDir: "/roms", scale: 2, frameRate: 30,
-      autoRunOnAgentStart: true, autoHideOnAgentEnd: false,
-      autoFocusOnAgentStart: true, autoFocusDebounceMs: 500, audio: false,
+      version: 1,
+      romDir: "/roms",
+      scale: 2,
+      frameRate: 30,
+      autoRunOnAgentStart: true,
+      autoHideOnAgentEnd: false,
+      autoFocusOnAgentStart: true,
+      autoFocusDebounceMs: 500,
+      audio: false,
     } as GbaConfig,
     caps: { kittyGraphics: true, audioBackend: undefined },
     notifyUnsupported() {},
@@ -363,8 +408,14 @@ test("completions include mute/unmute when audio provided, omit when undefined",
   registerAll(pi1, makeFakeDeps(makeMockAudio()));
   const withAudio = (await gc1("")) as { value: string }[];
   assert.ok(Array.isArray(withAudio), "completions should be an array");
-  assert.ok(withAudio.some((c) => c.value === "mute"), "mute in completions when audio provided");
-  assert.ok(withAudio.some((c) => c.value === "unmute"), "unmute in completions when audio provided");
+  assert.ok(
+    withAudio.some((c) => c.value === "mute"),
+    "mute in completions when audio provided",
+  );
+  assert.ok(
+    withAudio.some((c) => c.value === "unmute"),
+    "unmute in completions when audio provided",
+  );
 
   // Without audio
   const { pi: pi2, getCompletions: gc2 } = makePiWithCompletions();
@@ -386,7 +437,9 @@ test("alt+m toggle: unmuted→mute→unmute cycle", () => {
 
   const ctx = {
     ui: {
-      notify(message: string, type?: string) { notifyCalls.push({ message, type }); },
+      notify(message: string, type?: string) {
+        notifyCalls.push({ message, type });
+      },
       setWidget() {},
     },
   } as unknown as ExtensionContext;
@@ -409,7 +462,7 @@ test("alt+m toggle: unmuted→mute→unmute cycle", () => {
   }
 
   registerMuteShortcut(audio);
-  const handler = shortcutHandlers.get("alt+m")!;
+  const handler = defined(shortcutHandlers.get("alt+m"), "alt+m handler");
   assert.ok(handler !== undefined, "alt+m handler registered");
 
   // starts unmuted
@@ -441,7 +494,9 @@ test("alt+m with audio=undefined → notify 'audio not enabled'", () => {
   const notifyCalls: Array<{ message: string; type?: string }> = [];
   const ctx = {
     ui: {
-      notify(message: string, type?: string) { notifyCalls.push({ message, type }); },
+      notify(message: string, type?: string) {
+        notifyCalls.push({ message, type });
+      },
       setWidget() {},
     },
   } as unknown as ExtensionContext;
@@ -484,7 +539,9 @@ test("auto-focus: enter calls audio.start(), exit calls audio.stop() in finally"
   const mockCtx: ExtensionContext = {
     ui: {
       notify() {},
-      custom: async (factory: (tui: unknown, theme: unknown, kb: unknown, done: (r: undefined) => void) => unknown): Promise<undefined> => {
+      custom: async (
+        factory: (tui: unknown, theme: unknown, kb: unknown, done: (r: undefined) => void) => unknown,
+      ): Promise<undefined> => {
         customStarted = true;
         return new Promise<undefined>((resolve) => {
           customResolveFn = () => resolve(undefined);
@@ -504,24 +561,52 @@ test("auto-focus: enter calls audio.start(), exit calls audio.stop() in finally"
   } as unknown as ExtensionAPI;
 
   const render: RenderControllerWithSwap = {
-    start() {}, stop() {}, shrink() {}, expand() {}, hide() {},
-    destroy() {}, onRenderError() { return () => {}; },
-    __testGetImageId() { return undefined; },
-    useBackend() {}, activeBackend() { return "widget" as const; },
-    setCustomComponent() {}, showStillFrame() {}, setWidgetLiveTick() {},
+    start() {},
+    stop() {},
+    shrink() {},
+    expand() {},
+    hide() {},
+    destroy() {},
+    onRenderError() {
+      return () => {};
+    },
+    __testGetImageId() {
+      return undefined;
+    },
+    useBackend() {},
+    activeBackend() {
+      return "widget" as const;
+    },
+    setCustomComponent() {},
+    showStillFrame() {},
+    setWidgetLiveTick() {},
   } as unknown as RenderControllerWithSwap;
 
   const deps: AutoFocusDeps = {
     pi,
-    get render() { return render; },
+    get render() {
+      return render;
+    },
     emulator: {
-      step() {}, getFramebuffer() { return new Uint8Array(0); },
-      press() {}, release() {},
+      step() {},
+      getFramebuffer() {
+        return new Uint8Array(0);
+      },
+      press() {},
+      release() {},
     } as unknown as AutoFocusDeps["emulator"],
     lifecycle: {
-      attach() {}, detach() {}, manualPauseToggle() {},
-      isRunning() { return false; },
-      onRomLoad() {}, isCrashed() { return false; }, acknowledgeCrash() {},
+      attach() {},
+      detach() {},
+      manualPauseToggle() {},
+      isRunning() {
+        return false;
+      },
+      onRomLoad() {},
+      isCrashed() {
+        return false;
+      },
+      acknowledgeCrash() {},
     } as Lifecycle,
     getCtx: () => undefined,
     cfg: { autoFocusOnAgentStart: true, autoFocusDebounceMs: 0, scale: 2 },
@@ -542,7 +627,7 @@ test("auto-focus: enter calls audio.start(), exit calls audio.stop() in finally"
   assert.strictEqual(audio.startCalls, 1, "audio.start() called on game mode enter");
 
   // Exit game mode
-  customResolveFn!();
+  defined<() => void>(customResolveFn, "customResolveFn")();
   await enterPromise;
 
   assert.strictEqual(audio.stopCalls, 1, "audio.stop() called on game mode exit");
@@ -562,7 +647,9 @@ test("auto-focus: audio.start() rejection logs but does not block game mode entr
   const mockCtx: ExtensionContext = {
     ui: {
       notify() {},
-      custom: async (factory: (tui: unknown, theme: unknown, kb: unknown, done: (r: undefined) => void) => unknown): Promise<undefined> => {
+      custom: async (
+        factory: (tui: unknown, theme: unknown, kb: unknown, done: (r: undefined) => void) => unknown,
+      ): Promise<undefined> => {
         customStarted = true;
         return new Promise<undefined>((resolve) => {
           customResolveFn = () => resolve(undefined);
@@ -575,28 +662,57 @@ test("auto-focus: audio.start() rejection logs but does not block game mode entr
   } as unknown as ExtensionContext;
 
   const render: RenderControllerWithSwap = {
-    start() {}, stop() {}, shrink() {}, expand() {}, hide() {},
-    destroy() {}, onRenderError() { return () => {}; },
-    __testGetImageId() { return undefined; },
-    useBackend() {}, activeBackend() { return "widget" as const; },
-    setCustomComponent() {}, showStillFrame() {}, setWidgetLiveTick() {},
+    start() {},
+    stop() {},
+    shrink() {},
+    expand() {},
+    hide() {},
+    destroy() {},
+    onRenderError() {
+      return () => {};
+    },
+    __testGetImageId() {
+      return undefined;
+    },
+    useBackend() {},
+    activeBackend() {
+      return "widget" as const;
+    },
+    setCustomComponent() {},
+    showStillFrame() {},
+    setWidgetLiveTick() {},
   } as unknown as RenderControllerWithSwap;
 
   const pi = {
-    on() {}, registerShortcut() {},
+    on() {},
+    registerShortcut() {},
   } as unknown as ExtensionAPI;
 
   const deps: AutoFocusDeps = {
     pi,
-    get render() { return render; },
+    get render() {
+      return render;
+    },
     emulator: {
-      step() {}, getFramebuffer() { return new Uint8Array(0); },
-      press() {}, release() {},
+      step() {},
+      getFramebuffer() {
+        return new Uint8Array(0);
+      },
+      press() {},
+      release() {},
     } as unknown as AutoFocusDeps["emulator"],
     lifecycle: {
-      attach() {}, detach() {}, manualPauseToggle() {},
-      isRunning() { return false; },
-      onRomLoad() {}, isCrashed() { return false; }, acknowledgeCrash() {},
+      attach() {},
+      detach() {},
+      manualPauseToggle() {},
+      isRunning() {
+        return false;
+      },
+      onRomLoad() {},
+      isCrashed() {
+        return false;
+      },
+      acknowledgeCrash() {},
     } as Lifecycle,
     getCtx: () => undefined,
     cfg: { autoFocusOnAgentStart: false, autoFocusDebounceMs: 0, scale: 2 },
@@ -621,6 +737,6 @@ test("auto-focus: audio.start() rejection logs but does not block game mode entr
   );
 
   // Clean up
-  customResolveFn!();
+  defined<() => void>(customResolveFn, "customResolveFn")();
   await enterPromise;
 });

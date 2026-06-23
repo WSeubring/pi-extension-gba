@@ -1,3 +1,4 @@
+import { defined } from "./assert.js";
 /**
  * Phase 10a — Harness scenario tests.
  *
@@ -7,27 +8,26 @@
  * Design ref: docs/design/phase-10-feedback-loop.md §10a
  */
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-
-import { createMockPi } from "./mock-pi.js";
-import { createMockCtx } from "./mock-ctx.js";
-import { GbaGameComponent } from "../../src/game-component.js";
-import { createAutoFocus } from "../../src/auto-focus.js";
-import type { AutoFocusDeps } from "../../src/auto-focus.js";
-import { registerAll } from "../../src/commands.js";
-import type { CommandDeps } from "../../src/commands.js";
-import { loadConfigFile, popQueuedWarning, getConfigPath, normalize } from "../../src/config.js";
+import { test } from "node:test";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { Component, TUI } from "@mariozechner/pi-tui";
 import type { AudioPlayer } from "../../src/audio.js";
+import type { AutoFocusDeps } from "../../src/auto-focus.js";
+import { createAutoFocus } from "../../src/auto-focus.js";
+import type { CommandDeps } from "../../src/commands.js";
+import { registerAll } from "../../src/commands.js";
+import { getConfigPath, loadConfigFile, normalize, popQueuedWarning } from "../../src/config.js";
 import type { Emulator } from "../../src/emulator.js";
-import type { Persistence } from "../../src/persistence.js";
+import { GbaGameComponent } from "../../src/game-component.js";
 import type { Lifecycle, RenderController } from "../../src/lifecycle.js";
+import type { Persistence } from "../../src/persistence.js";
 import type { RenderControllerWithSwap } from "../../src/render.js";
 import type { ButtonSink } from "../../src/types.js";
-import type { TUI, Component } from "@mariozechner/pi-tui";
-import type { ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { createMockCtx } from "./mock-ctx.js";
+import { createMockPi } from "./mock-pi.js";
 
 // ---------------------------------------------------------------------------
 // Emulator stub — minimal surface consumed by auto-focus + lifecycle + render.
@@ -45,16 +45,26 @@ function makeMockEmulator() {
       return new Uint8Array(240 * 160 * 4);
     },
     // ButtonSink
-    press(button: string) { pressedButtons.push(button); },
-    release(button: string) { releasedButtons.push(button); },
+    press(button: string) {
+      pressedButtons.push(button);
+    },
+    release(button: string) {
+      releasedButtons.push(button);
+    },
     // Emulator extras
-    onCrash(handler: (err: Error) => void) { crashHandler = handler; },
+    onCrash(handler: (err: Error) => void) {
+      crashHandler = handler;
+    },
     destroy() {},
     loadRom(_bytes: Uint8Array) {},
-    saveState(): Uint8Array { return new Uint8Array(0); },
+    saveState(): Uint8Array {
+      return new Uint8Array(0);
+    },
     loadState(_bytes: Uint8Array) {},
     // Test helpers
-    _simulateCrash(msg = "crash") { crashHandler?.(new Error(msg)); },
+    _simulateCrash(msg = "crash") {
+      defined(crashHandler, "crashHandler")(new Error(msg));
+    },
     pressedButtons,
     releasedButtons,
   };
@@ -70,21 +80,50 @@ function makeMockRender() {
   const calls: string[] = [];
 
   return {
-    start() { calls.push("start"); },
-    stop() { calls.push("stop"); },
-    shrink() { calls.push("shrink"); },
-    expand() { calls.push("expand"); },
-    hide() { calls.push("hide"); },
-    destroy() { calls.push("destroy"); },
-    onRenderError() { return () => {}; },
-    __testGetImageId() { return undefined; },
-    useBackend(kind: "widget" | "custom") { backend = kind; calls.push(`useBackend:${kind}`); },
-    activeBackend() { return backend; },
-    setCustomComponent(component: typeof liveComponent) { liveComponent = component; },
-    showStillFrame() { calls.push("showStillFrame"); },
+    start() {
+      calls.push("start");
+    },
+    stop() {
+      calls.push("stop");
+    },
+    shrink() {
+      calls.push("shrink");
+    },
+    expand() {
+      calls.push("expand");
+    },
+    hide() {
+      calls.push("hide");
+    },
+    destroy() {
+      calls.push("destroy");
+    },
+    onRenderError() {
+      return () => {};
+    },
+    __testGetImageId() {
+      return undefined;
+    },
+    useBackend(kind: "widget" | "custom") {
+      backend = kind;
+      calls.push(`useBackend:${kind}`);
+    },
+    activeBackend() {
+      return backend;
+    },
+    setCustomComponent(component: typeof liveComponent) {
+      liveComponent = component;
+    },
+    showStillFrame() {
+      calls.push("showStillFrame");
+    },
     setWidgetLiveTick(_enabled: boolean) {},
-    _getLiveComponent() { return liveComponent; },
-    _calls() { return calls; },
+    _getLiveComponent() {
+      return liveComponent;
+    },
+    _calls() {
+      return calls;
+    },
   };
 }
 
@@ -102,9 +141,15 @@ function makeMockPersistence(lastPlayedRom: string | undefined, roms: string[]) 
     },
     async snapshot() {},
     async flushPending() {},
-    async listRoms() { return roms; },
-    async lastPlayed() { return lastPlayedRom; },
-    currentRom() { return currentRomBasename; },
+    async listRoms() {
+      return roms;
+    },
+    async lastPlayed() {
+      return lastPlayedRom;
+    },
+    currentRom() {
+      return currentRomBasename;
+    },
     async clearState() {},
     destroy() {},
   };
@@ -119,15 +164,32 @@ function makeMockLifecycle(opts: { isRunning?: boolean } = {}) {
   const calls: string[] = [];
 
   return {
-    attach() { calls.push("attach"); },
-    detach() { calls.push("detach"); },
-    manualPauseToggle() { calls.push("manualPauseToggle"); },
-    isRunning() { return running; },
-    onRomLoad() { running = true; calls.push("onRomLoad"); },
-    isCrashed() { return false; },
+    attach() {
+      calls.push("attach");
+    },
+    detach() {
+      calls.push("detach");
+    },
+    manualPauseToggle() {
+      calls.push("manualPauseToggle");
+    },
+    isRunning() {
+      return running;
+    },
+    onRomLoad() {
+      running = true;
+      calls.push("onRomLoad");
+    },
+    isCrashed() {
+      return false;
+    },
     acknowledgeCrash() {},
-    _calls() { return calls; },
-    _setRunning(v: boolean) { running = v; },
+    _calls() {
+      return calls;
+    },
+    _setRunning(v: boolean) {
+      running = v;
+    },
   };
 }
 
@@ -140,14 +202,30 @@ function makeMockAudio() {
   let muted = false;
 
   return {
-    async start() { calls.push("start"); },
-    async stop() { calls.push("stop"); },
+    async start() {
+      calls.push("start");
+    },
+    async stop() {
+      calls.push("stop");
+    },
     writeSamples(_pcm: Int16Array) {},
-    mute() { muted = true; calls.push("mute"); },
-    unmute() { muted = false; calls.push("unmute"); },
-    isMuted() { return muted; },
-    onCrash(_handler: (err: Error) => void) { return () => {}; },
-    _calls() { return calls; },
+    mute() {
+      muted = true;
+      calls.push("mute");
+    },
+    unmute() {
+      muted = false;
+      calls.push("unmute");
+    },
+    isMuted() {
+      return muted;
+    },
+    onCrash(_handler: (err: Error) => void) {
+      return () => {};
+    },
+    _calls() {
+      return calls;
+    },
   };
 }
 
@@ -241,7 +319,9 @@ test("scenario 1: cold-start /gba → picker → game mode → ctrl+c exits", as
 
   const autoFocus = createAutoFocus({
     pi: mockPi.pi,
-    get render() { return render as unknown as RenderControllerWithSwap; },
+    get render() {
+      return render as unknown as RenderControllerWithSwap;
+    },
     emulator: emulator as unknown as AutoFocusDeps["emulator"],
     lifecycle: lifecycle as unknown as Lifecycle,
     getCtx: () => undefined,
@@ -274,7 +354,10 @@ test("scenario 1: cold-start /gba → picker → game mode → ctrl+c exits", as
     enterGameMode: (ctx: ExtensionContext) => autoFocus.enterManual(ctx),
   } as unknown as CommandDeps);
 
-  assert.ok(mockPi.commands.some((c) => c.name === "gba"), "/gba command registered");
+  assert.ok(
+    mockPi.commands.some((c) => c.name === "gba"),
+    "/gba command registered",
+  );
 
   // Invoke /gba with no args — no last-played → open picker.
   const commandPromise = mockPi.invokeCommand("gba", "", mockCtx.ctx);
@@ -289,15 +372,15 @@ test("scenario 1: cold-start /gba → picker → game mode → ctrl+c exits", as
 
   // Simulate a frame tick.
   const rgba = new Uint8Array(480 * 320 * 4).fill(128);
-  capturedComponent!.acceptFrame(rgba, 480, 320);
+  capturedComponent?.acceptFrame(rgba, 480, 320);
 
   // Render should now return > 1 row (empty spacers + image line).
-  const rendered = capturedComponent!.render(80);
+  const rendered = capturedComponent?.render(80);
   assert.ok(rendered.length > 1, `render returned ${rendered.length} rows (expected > 1)`);
 
   // Exit via ctrl+c.
   assert.equal(gameModeResolved, false, "not yet resolved before ctrl+c");
-  capturedComponent!.handleInput("\x03");
+  capturedComponent?.handleInput("\x03");
   assert.equal(gameModeResolved, true, "done() called after ctrl+c");
 
   await commandPromise;
@@ -336,7 +419,9 @@ test("scenario 2: agent_start → game mode → agent_end → auto-exit", async 
 
   const autoFocus = createAutoFocus({
     pi: mockPi.pi,
-    get render() { return render as unknown as RenderControllerWithSwap; },
+    get render() {
+      return render as unknown as RenderControllerWithSwap;
+    },
     emulator: emulator as unknown as AutoFocusDeps["emulator"],
     lifecycle: lifecycle as unknown as Lifecycle,
     getCtx: () => undefined,
@@ -388,7 +473,9 @@ test("scenario 3: alt+g manual entry when ROM loaded but Paused → game mode mo
 
   const autoFocus = createAutoFocus({
     pi: mockPi.pi,
-    get render() { return render as unknown as RenderControllerWithSwap; },
+    get render() {
+      return render as unknown as RenderControllerWithSwap;
+    },
     emulator: emulator as unknown as AutoFocusDeps["emulator"],
     lifecycle: lifecycle as unknown as Lifecycle,
     getCtx: () => undefined,
@@ -462,7 +549,9 @@ for (const { label, bytes } of EXIT_KEYS) {
         sink: fakeEmulator as unknown as ButtonSink,
         scale: 2,
       },
-      () => { doneCount++; },
+      () => {
+        doneCount++;
+      },
     );
 
     component.handleInput(bytes);
@@ -479,7 +568,9 @@ test("scenario 4 (release guard): alt+g key-RELEASE does NOT exit game mode", ()
       sink: { press() {}, release() {} } as unknown as ButtonSink,
       scale: 2,
     },
-    () => { doneCount++; },
+    () => {
+      doneCount++;
+    },
   );
 
   component.handleInput("\x1b[103;3:3u"); // alt+g release (Kitty event type 3)
@@ -493,8 +584,8 @@ test("scenario 4 (release guard): alt+g key-RELEASE does NOT exit game mode", ()
 // ---------------------------------------------------------------------------
 
 test("scenario 5: PI_GBA_AUTO_FOCUS=0 → agent_start skips auto-enter; alt+g still works", async () => {
-  const savedEnv = process.env["PI_GBA_AUTO_FOCUS"];
-  process.env["PI_GBA_AUTO_FOCUS"] = "0";
+  const savedEnv = process.env.PI_GBA_AUTO_FOCUS;
+  process.env.PI_GBA_AUTO_FOCUS = "0";
 
   try {
     const mockPi = createMockPi();
@@ -513,7 +604,9 @@ test("scenario 5: PI_GBA_AUTO_FOCUS=0 → agent_start skips auto-enter; alt+g st
 
     const autoFocus = createAutoFocus({
       pi: mockPi.pi,
-      get render() { return render as unknown as RenderControllerWithSwap; },
+      get render() {
+        return render as unknown as RenderControllerWithSwap;
+      },
       emulator: emulator as unknown as AutoFocusDeps["emulator"],
       lifecycle: lifecycle as unknown as Lifecycle,
       getCtx: () => undefined,
@@ -557,9 +650,9 @@ test("scenario 5: PI_GBA_AUTO_FOCUS=0 → agent_start skips auto-enter; alt+g st
     await altGPromise;
   } finally {
     if (savedEnv === undefined) {
-      delete process.env["PI_GBA_AUTO_FOCUS"];
+      delete process.env.PI_GBA_AUTO_FOCUS;
     } else {
-      process.env["PI_GBA_AUTO_FOCUS"] = savedEnv;
+      process.env.PI_GBA_AUTO_FOCUS = savedEnv;
     }
   }
 });
@@ -570,7 +663,7 @@ test("scenario 5: PI_GBA_AUTO_FOCUS=0 → agent_start skips auto-enter; alt+g st
 
 test("scenario 6: corrupt config file → .bak written + warning queued + defaults used", async () => {
   const configPath = getConfigPath();
-  const bakPath = configPath + ".bak";
+  const bakPath = `${configPath}.bak`;
 
   // Backup any existing config.
   let existingConfig: string | undefined;
@@ -584,11 +677,17 @@ test("scenario 6: corrupt config file → .bak written + warning queued + defaul
   const corruptContent = "{ not valid json!!! }}}";
   try {
     await fsPromises.mkdir(path.dirname(configPath), { recursive: true });
-  } catch { /* may already exist */ }
+  } catch {
+    /* may already exist */
+  }
   await fsPromises.writeFile(configPath, corruptContent, "utf8");
 
   // Remove any stale .bak.
-  try { await fsPromises.unlink(bakPath); } catch { /* ignore */ }
+  try {
+    await fsPromises.unlink(bakPath);
+  } catch {
+    /* ignore */
+  }
 
   // Clear any previously queued warning.
   popQueuedWarning();
@@ -602,7 +701,7 @@ test("scenario 6: corrupt config file → .bak written + warning queued + defaul
     // Warning should be queued.
     const warning = popQueuedWarning();
     assert.ok(typeof warning === "string" && warning.length > 0, "warning queued");
-    assert.ok(warning!.includes("gba.json.bak"), "warning mentions backup file");
+    assert.ok(warning?.includes("gba.json.bak"), "warning mentions backup file");
 
     // .bak file should contain the corrupt content.
     const bakContent = await fsPromises.readFile(bakPath, "utf8");
@@ -615,8 +714,16 @@ test("scenario 6: corrupt config file → .bak written + warning queued + defaul
     assert.equal(typeof defaults.romDir, "string", "romDir is a string");
   } finally {
     // Restore.
-    try { await fsPromises.unlink(bakPath); } catch { /* ignore */ }
-    try { await fsPromises.unlink(configPath); } catch { /* ignore */ }
+    try {
+      await fsPromises.unlink(bakPath);
+    } catch {
+      /* ignore */
+    }
+    try {
+      await fsPromises.unlink(configPath);
+    } catch {
+      /* ignore */
+    }
     if (existingConfig !== undefined) {
       await fsPromises.writeFile(configPath, existingConfig, "utf8");
     }
@@ -658,7 +765,9 @@ test("scenario 7 (direct-pin): render is static scaffolding; no Kitty bytes in d
 
   const autoFocus = createAutoFocus({
     pi: mockPi.pi,
-    get render() { return render as unknown as RenderControllerWithSwap; },
+    get render() {
+      return render as unknown as RenderControllerWithSwap;
+    },
     emulator: emulator as unknown as AutoFocusDeps["emulator"],
     lifecycle: lifecycle as unknown as Lifecycle,
     getCtx: () => undefined,
@@ -677,15 +786,21 @@ test("scenario 7 (direct-pin): render is static scaffolding; no Kitty bytes in d
   //      scaffolding immediately (so pi allocates the space before the
   //      first frame), and never embeds Kitty bytes — the placement is
   //      written straight to the terminal by acceptFrame instead.
-  const beforeFrame = capturedComponent!.render(80);
+  const beforeFrame = capturedComponent?.render(80);
   assert.ok(beforeFrame.length > 1, `pre-frame render returned ${beforeFrame.length} rows (expected full scaffolding)`);
-  assert.ok(beforeFrame.every((l) => !l.includes("\x1b_G")), "pre-frame render carries no Kitty bytes");
+  assert.ok(
+    beforeFrame.every((l) => !l.includes("\x1b_G")),
+    "pre-frame render carries no Kitty bytes",
+  );
 
   const rgba = new Uint8Array(480 * 320 * 4).fill(128);
-  capturedComponent!.acceptFrame(rgba, 480, 320);
-  const afterFrame = capturedComponent!.render(80);
+  capturedComponent?.acceptFrame(rgba, 480, 320);
+  const afterFrame = capturedComponent?.render(80);
   assert.deepEqual(afterFrame, beforeFrame, "render output is static across frames (diff never repaints it)");
-  assert.ok(afterFrame.every((l) => !l.includes("\x1b_G")), "post-frame render still carries no Kitty bytes");
+  assert.ok(
+    afterFrame.every((l) => !l.includes("\x1b_G")),
+    "post-frame render still carries no Kitty bytes",
+  );
 
   capturedDone?.();
 });
@@ -699,29 +814,15 @@ test("scenario 7 (direct-pin): render is static scaffolding; no Kitty bytes in d
 
 test("scenario 8 (bug 1): matchesKey recognizes all Kitty enhancement levels", async () => {
   const { matchesKey } = await import("@mariozechner/pi-tui");
-  const altG = [
-    "\x1bg",
-    "\x1b[103;3u",
-    "\x1b[103;3:1u",
-    "\x1b[103;3:2u",
-    "\x1b[103;3:3u",
-  ];
+  const altG = ["\x1bg", "\x1b[103;3u", "\x1b[103;3:1u", "\x1b[103;3:2u", "\x1b[103;3:3u"];
   for (const b of altG) {
     assert.ok(matchesKey(b, "alt+g"), `matchesKey should accept ${JSON.stringify(b)} as alt+g`);
   }
-  const ctrlC = [
-    "\x03",
-    "\x1b[99;5u",
-    "\x1b[99;5:1u",
-  ];
+  const ctrlC = ["\x03", "\x1b[99;5u", "\x1b[99;5:1u"];
   for (const b of ctrlC) {
     assert.ok(matchesKey(b, "ctrl+c"), `matchesKey should accept ${JSON.stringify(b)} as ctrl+c`);
   }
-  const esc = [
-    "\x1b",
-    "\x1b[27u",
-    "\x1b[27;1u",
-  ];
+  const esc = ["\x1b", "\x1b[27u", "\x1b[27;1u"];
   for (const b of esc) {
     assert.ok(matchesKey(b, "escape"), `matchesKey should accept ${JSON.stringify(b)} as escape`);
   }
@@ -735,8 +836,8 @@ test("scenario 8 (bug 1): matchesKey recognizes all Kitty enhancement levels", a
 // ---------------------------------------------------------------------------
 
 test("scenario 9 (bug 3): PI_GBA_AUDIO_TRACE=1 emits per-tick stats to stderr", async () => {
-  const savedFlag = process.env["PI_GBA_AUDIO_TRACE"];
-  process.env["PI_GBA_AUDIO_TRACE"] = "1";
+  const savedFlag = process.env.PI_GBA_AUDIO_TRACE;
+  process.env.PI_GBA_AUDIO_TRACE = "1";
 
   const savedStderr = process.stderr.write.bind(process.stderr);
   const captured: string[] = [];
@@ -769,12 +870,19 @@ test("scenario 9 (bug 3): PI_GBA_AUDIO_TRACE=1 emits per-tick stats to stderr", 
       writeSamples(_p: Int16Array) {},
       mute() {},
       unmute() {},
-      isMuted() { return false; },
-      onCrash() { return () => {}; },
+      isMuted() {
+        return false;
+      },
+      onCrash() {
+        return () => {};
+      },
     };
 
     const ctrl = createRenderer(ctx, fakeEmulator, {
-      scale: 1, frameRate: 30, initialBackend: "custom", audio: fakeAudio,
+      scale: 1,
+      frameRate: 30,
+      initialBackend: "custom",
+      audio: fakeAudio,
     });
 
     // Wire a dummy component so pushFrame does not no-op.
@@ -796,7 +904,7 @@ test("scenario 9 (bug 3): PI_GBA_AUDIO_TRACE=1 emits per-tick stats to stderr", 
     );
   } finally {
     (process.stderr as unknown as { write: typeof savedStderr }).write = savedStderr;
-    if (savedFlag === undefined) delete process.env["PI_GBA_AUDIO_TRACE"];
-    else process.env["PI_GBA_AUDIO_TRACE"] = savedFlag;
+    if (savedFlag === undefined) delete process.env.PI_GBA_AUDIO_TRACE;
+    else process.env.PI_GBA_AUDIO_TRACE = savedFlag;
   }
 });

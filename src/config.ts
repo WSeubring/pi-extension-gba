@@ -1,6 +1,6 @@
+import fsPromises from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import fsPromises from "node:fs/promises";
 
 // Env vars:
 //   PI_GBA_AUTO_FOCUS=0  — disable auto-focus (L7). Default: enabled.
@@ -11,7 +11,7 @@ export interface GbaConfig {
   version: 1;
   romDir: string;
   scale: 1 | 2 | 3;
-  frameRate: number;                 // 1..30
+  frameRate: number; // 1..30
   autoRunOnAgentStart: boolean;
   autoHideOnAgentEnd: boolean;
   /** Enter full-screen game mode on agent_start (after debounce). L1/L7. */
@@ -69,25 +69,17 @@ export function getConfigPath(): string {
  */
 export function normalize(input: Partial<GbaConfig>): GbaConfig {
   const rawScale = input.scale;
-  const scale: 1 | 2 | 3 =
-    rawScale === 1 || rawScale === 2 || rawScale === 3 ? rawScale : 2;
+  const scale: 1 | 2 | 3 = rawScale === 1 || rawScale === 2 || rawScale === 3 ? rawScale : 2;
 
-  const frameRate = clamp(
-    typeof input.frameRate === "number" ? input.frameRate : DEFAULTS.frameRate,
-    1,
-    30,
-  );
+  const frameRate = clamp(typeof input.frameRate === "number" ? input.frameRate : DEFAULTS.frameRate, 1, 30);
 
   const autoFocusDebounceMs = clamp(
-    typeof input.autoFocusDebounceMs === "number"
-      ? input.autoFocusDebounceMs
-      : DEFAULTS.autoFocusDebounceMs,
+    typeof input.autoFocusDebounceMs === "number" ? input.autoFocusDebounceMs : DEFAULTS.autoFocusDebounceMs,
     0,
     5000,
   );
 
-  const rawRomDir =
-    typeof input.romDir === "string" ? input.romDir : DEFAULTS.romDir;
+  const rawRomDir = typeof input.romDir === "string" ? input.romDir : DEFAULTS.romDir;
   const romDir = expandTilde(rawRomDir);
 
   return {
@@ -96,20 +88,13 @@ export function normalize(input: Partial<GbaConfig>): GbaConfig {
     scale,
     frameRate,
     autoRunOnAgentStart:
-      typeof input.autoRunOnAgentStart === "boolean"
-        ? input.autoRunOnAgentStart
-        : DEFAULTS.autoRunOnAgentStart,
+      typeof input.autoRunOnAgentStart === "boolean" ? input.autoRunOnAgentStart : DEFAULTS.autoRunOnAgentStart,
     autoHideOnAgentEnd:
-      typeof input.autoHideOnAgentEnd === "boolean"
-        ? input.autoHideOnAgentEnd
-        : DEFAULTS.autoHideOnAgentEnd,
+      typeof input.autoHideOnAgentEnd === "boolean" ? input.autoHideOnAgentEnd : DEFAULTS.autoHideOnAgentEnd,
     autoFocusOnAgentStart:
-      typeof input.autoFocusOnAgentStart === "boolean"
-        ? input.autoFocusOnAgentStart
-        : DEFAULTS.autoFocusOnAgentStart,
+      typeof input.autoFocusOnAgentStart === "boolean" ? input.autoFocusOnAgentStart : DEFAULTS.autoFocusOnAgentStart,
     autoFocusDebounceMs,
-    audio:
-      typeof input.audio === "boolean" ? input.audio : DEFAULTS.audio,
+    audio: typeof input.audio === "boolean" ? input.audio : DEFAULTS.audio,
   };
 }
 
@@ -151,11 +136,7 @@ export async function loadConfigFile(): Promise<Partial<GbaConfig>> {
     return {};
   }
 
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    (parsed as Record<string, unknown>)["version"] !== 1
-  ) {
+  if (typeof parsed !== "object" || parsed === null || (parsed as Record<string, unknown>).version !== 1) {
     await _backupAndWarn(configPath, raw, "unknown version");
     return {};
   }
@@ -163,12 +144,8 @@ export async function loadConfigFile(): Promise<Partial<GbaConfig>> {
   return parsed as Partial<GbaConfig>;
 }
 
-async function _backupAndWarn(
-  configPath: string,
-  raw: string,
-  reason: string,
-): Promise<void> {
-  const bakPath = configPath + ".bak";
+async function _backupAndWarn(configPath: string, raw: string, reason: string): Promise<void> {
+  const bakPath = `${configPath}.bak`;
   try {
     await fsPromises.writeFile(bakPath, raw, "utf8");
   } catch {
@@ -186,11 +163,7 @@ export async function saveConfigFile(cfg: GbaConfig): Promise<void> {
   const configPath = getConfigPath();
   const dir = path.dirname(configPath);
   await fsPromises.mkdir(dir, { recursive: true });
-  await fsPromises.writeFile(
-    configPath,
-    JSON.stringify(normalized, null, 2),
-    "utf8",
-  );
+  await fsPromises.writeFile(configPath, JSON.stringify(normalized, null, 2), "utf8");
 }
 
 /**
@@ -223,12 +196,12 @@ export async function resolveConfig(): Promise<GbaConfig> {
   const base = normalize(merged);
 
   // Layer 3: env vars override
-  const envAutoFocus = process.env["PI_GBA_AUTO_FOCUS"];
+  const envAutoFocus = process.env.PI_GBA_AUTO_FOCUS;
   if (envAutoFocus !== undefined) {
     base.autoFocusOnAgentStart = envAutoFocus !== "0";
   }
 
-  const envAudio = process.env["PI_GBA_AUDIO"];
+  const envAudio = process.env.PI_GBA_AUDIO;
   if (envAudio !== undefined) {
     base.audio = envAudio !== "0";
   }

@@ -1,18 +1,17 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import activateMinimal from "./minimal-activate.js";
-import { createEmulator } from "./emulator.js";
-import { createRenderer } from "./render.js";
-import type { RenderControllerWithSwap } from "./render.js";
-import type { RenderController as PhaseRenderController } from "./render.js";
-import { createLifecycle } from "./lifecycle.js";
-import type { RenderController } from "./lifecycle.js";
-import { resolveConfig } from "./config.js";
-import { createPersistence } from "./persistence.js";
-import { registerAll } from "./commands.js";
-import { detectCapabilities } from "./capabilities.js";
-import { createAutoFocus } from "./auto-focus.js";
-import { audioEnabled, createAudioPlayer } from "./audio.js";
 import type { AudioPlayer } from "./audio.js";
+import { audioEnabled, createAudioPlayer } from "./audio.js";
+import { createAutoFocus } from "./auto-focus.js";
+import { detectCapabilities } from "./capabilities.js";
+import { registerAll } from "./commands.js";
+import { resolveConfig } from "./config.js";
+import { createEmulator } from "./emulator.js";
+import type { RenderController } from "./lifecycle.js";
+import { createLifecycle } from "./lifecycle.js";
+import activateMinimal from "./minimal-activate.js";
+import { createPersistence } from "./persistence.js";
+import type { RenderController as PhaseRenderController, RenderControllerWithSwap } from "./render.js";
+import { createRenderer } from "./render.js";
 
 // ctx resolution: renderer construction requires an ExtensionCommandContext (for
 // ctx.ui.setWidget), which is only available per-call. We defer renderer
@@ -24,7 +23,7 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
   // Minimal-mode escape hatch. Set PI_GBA_MINIMAL=1 to skip auto-focus,
   // lifecycle coupling, audio, and the /gba config menu — /gba mounts
   // ctx.ui.custom directly. See src/minimal-activate.ts for rationale.
-  if (process.env["PI_GBA_MINIMAL"] === "1") {
+  if (process.env.PI_GBA_MINIMAL === "1") {
     await activateMinimal(pi);
     return;
   }
@@ -60,16 +59,12 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
 
   // Live audio gate: re-evaluated on every access so /gba config changes
   // apply immediately. Undefined = silent (disabled or no backend tool).
-  const getAudio = (): AudioPlayer | undefined =>
-    audioEnabled(cfg.audio) ? audioPlayer : undefined;
+  const getAudio = (): AudioPlayer | undefined => (audioEnabled(cfg.audio) ? audioPlayer : undefined);
 
   function notifyUnsupported(ctx: ExtensionContext): void {
     if (unsupportedNotified) return;
     unsupportedNotified = true;
-    ctx.ui.notify(
-      "GBA: this terminal does not support Kitty graphics — extension disabled",
-      "warning",
-    );
+    ctx.ui.notify("GBA: this terminal does not support Kitty graphics — extension disabled", "warning");
   }
 
   const NOOP_RENDER: RenderController = {
@@ -99,42 +94,57 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
     return render;
   }
 
-  const lifecycle = createLifecycle(
-    pi,
-    emulator,
-    (): RenderController => render ?? NOOP_RENDER,
-    {
-      // Live getters: /gba config mutates `cfg` in place (Object.assign in
-      // commands.ts); plain boolean copies here would freeze the values at
-      // activate time and silently ignore config changes until restart.
-      get autoRunOnAgentStart() { return cfg.autoRunOnAgentStart; },
-      get autoHideOnAgentEnd() { return cfg.autoHideOnAgentEnd; },
-      onPause: () => persistence.snapshot(),
+  const lifecycle = createLifecycle(pi, emulator, (): RenderController => render ?? NOOP_RENDER, {
+    // Live getters: /gba config mutates `cfg` in place (Object.assign in
+    // commands.ts); plain boolean copies here would freeze the values at
+    // activate time and silently ignore config changes until restart.
+    get autoRunOnAgentStart() {
+      return cfg.autoRunOnAgentStart;
     },
-  );
+    get autoHideOnAgentEnd() {
+      return cfg.autoHideOnAgentEnd;
+    },
+    onPause: () => persistence.snapshot(),
+  });
   lifecycle.attach();
 
   const autoFocus = createAutoFocus({
     pi,
-    get render() { return render; },
+    get render() {
+      return render;
+    },
     emulator,
     lifecycle,
     getCtx: () => undefined, // ctx is captured per-event inside createAutoFocus
     cfg: {
       // Live getters — same rationale as the lifecycle options above.
-      get autoFocusOnAgentStart() { return cfg.autoFocusOnAgentStart; },
-      get autoFocusDebounceMs() { return cfg.autoFocusDebounceMs; },
+      get autoFocusOnAgentStart() {
+        return cfg.autoFocusOnAgentStart;
+      },
+      get autoFocusDebounceMs() {
+        return cfg.autoFocusDebounceMs;
+      },
       scale: cfg.scale, // restart-gated (renderer built once); /gba config says so
     },
     caps,
     notifyUnsupported,
-    get audio() { return getAudio(); },
+    get audio() {
+      return getAudio();
+    },
   });
   autoFocus.attach();
 
   registerAll(pi, {
-    emulator, persistence, lifecycle, ensureRender, cfg, caps, notifyUnsupported,
-    get audio() { return getAudio(); },
+    emulator,
+    persistence,
+    lifecycle,
+    ensureRender,
+    cfg,
+    caps,
+    notifyUnsupported,
+    get audio() {
+      return getAudio();
+    },
     // After /gba (+ variants) loads a ROM, mount game mode so the user can
     // play immediately. L5 disables ambient widget ticking, so without this
     // the user would have to press alt+g after every /gba to see the game.
@@ -150,10 +160,7 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
       lastCtx = ctx;
       const audio = getAudio();
       if (!audio) {
-        ctx.ui.notify(
-          "GBA: audio not enabled — set PI_GBA_AUDIO=1 or enable via /gba config",
-          "warning",
-        );
+        ctx.ui.notify("GBA: audio not enabled — set PI_GBA_AUDIO=1 or enable via /gba config", "warning");
         return;
       }
       if (audio.isMuted()) {
@@ -170,7 +177,7 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
     try {
       await persistence.snapshot();
     } catch (err) {
-      console.warn("[pi-extension-gba] session_shutdown snapshot failed: " + String((err as Error)?.message ?? err));
+      console.warn(`[pi-extension-gba] session_shutdown snapshot failed: ${String((err as Error)?.message ?? err)}`);
     }
     autoFocus.detach();
     await persistence.flushPending();
@@ -178,17 +185,17 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
     try {
       (render as PhaseRenderController | undefined)?.destroy();
     } catch (err) {
-      console.warn("[pi-extension-gba] render.destroy failed: " + String((err as Error)?.message ?? err));
+      console.warn(`[pi-extension-gba] render.destroy failed: ${String((err as Error)?.message ?? err)}`);
     }
     try {
       await audioPlayer?.stop();
     } catch (err) {
-      console.warn("[pi-extension-gba] audio.stop failed: " + String((err as Error)?.message ?? err));
+      console.warn(`[pi-extension-gba] audio.stop failed: ${String((err as Error)?.message ?? err)}`);
     }
     try {
       emulator.destroy();
     } catch (err) {
-      console.warn("[pi-extension-gba] emulator.destroy failed: " + String((err as Error)?.message ?? err));
+      console.warn(`[pi-extension-gba] emulator.destroy failed: ${String((err as Error)?.message ?? err)}`);
     }
   });
 }

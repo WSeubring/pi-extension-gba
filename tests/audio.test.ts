@@ -5,10 +5,11 @@
  * Uses a child_process.spawn mock that returns a fake ChildProcess object
  * (EventEmitter + stdin Writable stub + kill() spy).
  */
-import { test, afterEach } from "node:test";
+
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { Writable } from "node:stream";
+import { afterEach, test } from "node:test";
 
 // ---------------------------------------------------------------------------
 // Fake ChildProcess factory
@@ -79,8 +80,8 @@ function makeFakeProc(): FakeChildProcess {
 // Imports from audio module
 // ---------------------------------------------------------------------------
 
-import { audioEnabled, createAudioPlayer, __setSpawnForTest } from "../src/audio.js";
 import type { AudioPlayer } from "../src/audio.js";
+import { __setSpawnForTest, audioEnabled, createAudioPlayer } from "../src/audio.js";
 
 afterEach(() => {
   __setSpawnForTest(undefined);
@@ -92,11 +93,14 @@ afterEach(() => {
 
 import type { AudioBackend } from "../src/audio.js";
 
-function makePlayer(backend: AudioBackend = "aplay"): AudioPlayer | undefined {
+function makePlayer(backend: AudioBackend = "aplay"): AudioPlayer {
   const saved = process.env.PI_GBA_AUDIO;
   process.env.PI_GBA_AUDIO = "1";
   const player = createAudioPlayer({ backend, cfgAudio: false });
   process.env.PI_GBA_AUDIO = saved;
+  if (!player) {
+    throw new Error(`makePlayer: createAudioPlayer returned undefined for backend "${backend}"`);
+  }
   return player;
 }
 
@@ -165,17 +169,17 @@ test("no-backend: backend=undefined → undefined regardless of gate", () => {
 test("mute/unmute/isMuted: default is unmuted", () => {
   const player = makePlayer();
   assert.ok(player !== undefined);
-  assert.equal(player!.isMuted(), false);
+  assert.equal(player?.isMuted(), false);
 });
 
 test("mute: isMuted returns true after mute()", () => {
-  const player = makePlayer()!;
+  const player = makePlayer();
   player.mute();
   assert.equal(player.isMuted(), true);
 });
 
 test("unmute: isMuted returns false after unmute()", () => {
-  const player = makePlayer()!;
+  const player = makePlayer();
   player.mute();
   player.unmute();
   assert.equal(player.isMuted(), false);
@@ -187,7 +191,7 @@ test("unmute: isMuted returns false after unmute()", () => {
 
 test("onCrash: unsubscribe prevents later calls", () => {
   const calls: Error[] = [];
-  const player = makePlayer()!;
+  const player = makePlayer();
 
   const unsub = player.onCrash((err) => calls.push(err));
   unsub();
@@ -197,7 +201,7 @@ test("onCrash: unsubscribe prevents later calls", () => {
 });
 
 test("onCrash: calling unsubscribe multiple times is safe", () => {
-  const player = makePlayer()!;
+  const player = makePlayer();
   const unsub = player.onCrash(() => {});
   unsub();
   assert.doesNotThrow(() => unsub());
@@ -211,7 +215,7 @@ test("writeSamples: no-op before start() is called", () => {
   const fakeProc = makeFakeProc();
   __setSpawnForTest(() => fakeProc);
 
-  const player = makePlayer()!;
+  const player = makePlayer();
 
   // Not started — should not throw and not write anything
   assert.doesNotThrow(() => {
@@ -228,14 +232,15 @@ test("start+write: writeSamples writes exact bytes to stdin", async () => {
   const fakeProc = makeFakeProc();
   __setSpawnForTest(() => fakeProc);
 
-  const player = makePlayer()!;
+  const player = makePlayer();
   await player.start();
 
   const pcm = new Int16Array([100, 200, 300, 400]);
   player.writeSamples(pcm);
 
   assert.equal(fakeProc.stdin.writtenChunks.length, 1, "one chunk written");
-  const written = fakeProc.stdin.writtenChunks[0]!;
+  const written = fakeProc.stdin.writtenChunks[0];
+  assert.ok(written, "expected a written chunk");
   assert.equal(written.byteLength, pcm.byteLength, "correct byte length");
   const view = new Int16Array(written.buffer, written.byteOffset, written.byteLength / 2);
   assert.deepEqual(Array.from(view), [100, 200, 300, 400]);
@@ -254,7 +259,7 @@ test("mute: muted writeSamples writes same-length zeros", async () => {
   const fakeProc = makeFakeProc();
   __setSpawnForTest(() => fakeProc);
 
-  const player = makePlayer()!;
+  const player = makePlayer();
   await player.start();
   player.mute();
 
@@ -262,7 +267,8 @@ test("mute: muted writeSamples writes same-length zeros", async () => {
   player.writeSamples(pcm);
 
   assert.equal(fakeProc.stdin.writtenChunks.length, 1);
-  const written = fakeProc.stdin.writtenChunks[0]!;
+  const written = fakeProc.stdin.writtenChunks[0];
+  assert.ok(written, "expected a written chunk");
   const view = new Int16Array(written.buffer, written.byteOffset, written.byteLength / 2);
   assert.deepEqual(Array.from(view), [0, 0, 0, 0], "muted → zeros");
   assert.equal(view.length, pcm.length, "same length as input");
@@ -276,7 +282,7 @@ test("unmute: restores original bytes after unmute()", async () => {
   const fakeProc = makeFakeProc();
   __setSpawnForTest(() => fakeProc);
 
-  const player = makePlayer()!;
+  const player = makePlayer();
   await player.start();
   player.mute();
   player.unmute();
@@ -285,7 +291,8 @@ test("unmute: restores original bytes after unmute()", async () => {
   player.writeSamples(pcm);
 
   assert.equal(fakeProc.stdin.writtenChunks.length, 1);
-  const written = fakeProc.stdin.writtenChunks[0]!;
+  const written = fakeProc.stdin.writtenChunks[0];
+  assert.ok(written, "expected a written chunk");
   const view = new Int16Array(written.buffer, written.byteOffset, written.byteLength / 2);
   assert.deepEqual(Array.from(view), [100, 200], "unmuted → original bytes");
 
@@ -309,7 +316,8 @@ test("crash: onCrash fires once on non-zero exit", async () => {
     backend: "aplay",
     cfgAudio: false,
     onCrash: (err) => crashErrors.push(err),
-  })!;
+  });
+  assert.ok(player, "expected audio player");
   process.env.PI_GBA_AUDIO = saved;
 
   await player.start();
@@ -318,14 +326,14 @@ test("crash: onCrash fires once on non-zero exit", async () => {
   fakeProc.simulateExit(1);
 
   assert.equal(crashErrors.length, 1, "onCrash called once");
-  assert.ok(crashErrors[0]!.message.includes("code=1"), "error message has exit code");
+  assert.ok(crashErrors[0]?.message.includes("code=1"), "error message has exit code");
 });
 
 test("crash: writeSamples is no-op after crash", async () => {
   const fakeProc = makeFakeProc();
   __setSpawnForTest(() => fakeProc);
 
-  const player = makePlayer()!;
+  const player = makePlayer();
   await player.start();
 
   // Write something before crash to confirm it works
@@ -352,7 +360,8 @@ test("crash: onCrash does NOT fire on zero exit", async () => {
     backend: "aplay",
     cfgAudio: false,
     onCrash: (err) => crashErrors.push(err),
-  })!;
+  });
+  assert.ok(player, "expected audio player");
   process.env.PI_GBA_AUDIO = saved;
 
   await player.start();
@@ -369,7 +378,7 @@ test("stop: idempotent — calling stop() twice does not throw or hang", async (
   const fakeProc = makeFakeProc();
   __setSpawnForTest(() => fakeProc);
 
-  const player = makePlayer()!;
+  const player = makePlayer();
   await player.start();
 
   // First stop: call stop(), then emit exit to resolve it
@@ -385,7 +394,7 @@ test("stop: stdin.end() called and SIGTERM sent", async () => {
   const fakeProc = makeFakeProc();
   __setSpawnForTest(() => fakeProc);
 
-  const player = makePlayer()!;
+  const player = makePlayer();
   await player.start();
 
   // Register stop, let stdin.end's callback fire, then emit exit
@@ -418,7 +427,7 @@ test("spawn args: pw-cat uses correct flags", async () => {
 
   const saved = process.env.PI_GBA_AUDIO;
   process.env.PI_GBA_AUDIO = "1";
-  const player = createAudioPlayer({ backend: "pw-cat", cfgAudio: false })!;
+  const player = makePlayer("pw-cat");
   process.env.PI_GBA_AUDIO = saved;
 
   await player.start();
@@ -445,7 +454,7 @@ test("spawn args: pacat uses correct flags", async () => {
 
   const saved = process.env.PI_GBA_AUDIO;
   process.env.PI_GBA_AUDIO = "1";
-  const player = createAudioPlayer({ backend: "pacat", cfgAudio: false })!;
+  const player = makePlayer("pacat");
   process.env.PI_GBA_AUDIO = saved;
 
   await player.start();
@@ -454,8 +463,14 @@ test("spawn args: pacat uses correct flags", async () => {
   await stopP;
 
   assert.equal(spawnedCmd, "pacat");
-  assert.ok(spawnedArgs.some((a) => a.includes("65536")), "pacat has rate 65536");
-  assert.ok(spawnedArgs.some((a) => a.includes("s16le")), "pacat has format s16le");
+  assert.ok(
+    spawnedArgs.some((a) => a.includes("65536")),
+    "pacat has rate 65536",
+  );
+  assert.ok(
+    spawnedArgs.some((a) => a.includes("s16le")),
+    "pacat has format s16le",
+  );
 });
 
 test("spawn args: ffplay uses correct flags", async () => {
@@ -471,7 +486,7 @@ test("spawn args: ffplay uses correct flags", async () => {
 
   const saved = process.env.PI_GBA_AUDIO;
   process.env.PI_GBA_AUDIO = "1";
-  const player = createAudioPlayer({ backend: "ffplay", cfgAudio: false })!;
+  const player = makePlayer("ffplay");
   process.env.PI_GBA_AUDIO = saved;
 
   await player.start();
@@ -498,7 +513,7 @@ test("spawn args: aplay uses correct flags", async () => {
 
   const saved = process.env.PI_GBA_AUDIO;
   process.env.PI_GBA_AUDIO = "1";
-  const player = createAudioPlayer({ backend: "aplay", cfgAudio: false })!;
+  const player = makePlayer("aplay");
   process.env.PI_GBA_AUDIO = saved;
 
   await player.start();
@@ -523,7 +538,7 @@ test("start: idempotent — calling start() twice is safe", async () => {
     return fakeProc;
   });
 
-  const player = makePlayer()!;
+  const player = makePlayer();
   await player.start();
   await player.start(); // second call should be a no-op
 
@@ -542,7 +557,7 @@ test("onCrash method: registered callback fires on crash, unsubscribed does not"
   const fakeProc = makeFakeProc();
   __setSpawnForTest(() => fakeProc);
 
-  const player = makePlayer()!;
+  const player = makePlayer();
   await player.start();
 
   const calls1: Error[] = [];
@@ -589,7 +604,9 @@ test("backpressure: chunks dropped and logger called once when stdin buffer is f
   wedgedStdin.end = (..._args: unknown[]) => wedgedStdin;
   // Override writableLength to simulate a full buffer.
   Object.defineProperty(wedgedStdin, "writableLength", {
-    get() { return accumulated; },
+    get() {
+      return accumulated;
+    },
   });
   proc.stdin = wedgedStdin;
 
@@ -601,7 +618,8 @@ test("backpressure: chunks dropped and logger called once when stdin buffer is f
     backend: "aplay",
     cfgAudio: false,
     logger: (msg) => logMessages.push(msg),
-  })!;
+  });
+  assert.ok(player, "expected audio player");
   process.env.PI_GBA_AUDIO = saved;
 
   await player.start();
@@ -646,7 +664,7 @@ test("start→stop→start re-arm: second start spawns fresh process, old crash 
     return spawnCount === 1 ? fakeProc1 : fakeProc2;
   });
 
-  const player = makePlayer()!;
+  const player = makePlayer();
 
   // First lifecycle: start → crash listeners attached.
   const crashCallsFirstSession: Error[] = [];
@@ -689,7 +707,7 @@ test("crash: signal death (code=null, signal=SIGKILL) fires crash listeners", as
   const fakeProc = makeFakeProc();
   __setSpawnForTest(() => fakeProc);
 
-  const player = makePlayer()!;
+  const player = makePlayer();
   const crashes: Error[] = [];
   player.onCrash((err) => crashes.push(err));
 
@@ -719,7 +737,8 @@ test("stdin 'error' event is swallowed and marks the session crashed", async () 
     backend: "aplay",
     cfgAudio: false,
     logger: (msg) => logged.push(msg),
-  })!;
+  });
+  assert.ok(player, "expected audio player");
   process.env.PI_GBA_AUDIO = saved;
 
   await player.start();
@@ -731,7 +750,10 @@ test("stdin 'error' event is swallowed and marks the session crashed", async () 
 
   player.writeSamples(new Int16Array([1, 2, 3, 4]));
   assert.equal(fakeProc.stdin.writtenChunks.length, 0, "no writes after stdin error");
-  assert.ok(logged.some((m) => m.includes("EPIPE")), "stdin error is logged");
+  assert.ok(
+    logged.some((m) => m.includes("EPIPE")),
+    "stdin error is logged",
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -745,7 +767,7 @@ test("stop() resolves promptly when the subprocess already exited", async () => 
   (fakeProc as unknown as { signalCode: string | null }).signalCode = "SIGKILL";
   __setSpawnForTest(() => fakeProc);
 
-  const player = makePlayer()!;
+  const player = makePlayer();
   await player.start();
   fakeProc.simulateExit(null as unknown as number, "SIGKILL");
 
@@ -755,7 +777,10 @@ test("stop() resolves promptly when the subprocess already exited", async () => 
   // And a follow-up start() must spawn a fresh process.
   const fresh = makeFakeProc();
   let spawnedAgain = false;
-  __setSpawnForTest(() => { spawnedAgain = true; return fresh; });
+  __setSpawnForTest(() => {
+    spawnedAgain = true;
+    return fresh;
+  });
   await player.start();
   assert.ok(spawnedAgain, "restart after crash spawns a new subprocess");
   player.writeSamples(new Int16Array([1, 2]));
@@ -772,7 +797,7 @@ test("crash: spawn 'error' (ENOENT) fires crash listeners exactly once, even wit
   __setSpawnForTest(() => fakeProc);
 
   const crashes: Error[] = [];
-  const player = makePlayer()!;
+  const player = makePlayer();
   player.onCrash((err) => crashes.push(err));
 
   await player.start();
@@ -781,7 +806,7 @@ test("crash: spawn 'error' (ENOENT) fires crash listeners exactly once, even wit
   fakeProc.emit("error", enoent);
 
   assert.equal(crashes.length, 1, "spawn failure must reach onCrash listeners");
-  assert.ok(crashes[0]!.message.includes("ENOENT"), "error message carries the spawn failure");
+  assert.ok(crashes[0]?.message.includes("ENOENT"), "error message carries the spawn failure");
 
   // A (hypothetical) late non-zero exit must not double-fire via the shared
   // fired-once guard.
@@ -802,7 +827,7 @@ test("stop() resolves via the final fallback when the child never exits", async 
   const fakeProc = makeFakeProc(); // kill() is a spy; never emits 'exit'
   __setSpawnForTest(() => fakeProc);
 
-  const player = makePlayer()!;
+  const player = makePlayer();
   await player.start();
 
   // 200 ms SIGTERM→SIGKILL + 200 ms final fallback; 2 s cap proves no hang.

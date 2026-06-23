@@ -1,4 +1,4 @@
-import { readdir, readFile, rename, rm, unlink, writeFile, mkdir, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { Emulator } from "./emulator.js";
@@ -61,10 +61,7 @@ async function pathExists(p: string): Promise<boolean> {
   }
 }
 
-export function createPersistence(
-  emulator: Emulator,
-  opts: PersistenceOptions,
-): Persistence {
+export function createPersistence(emulator: Emulator, opts: PersistenceOptions): Persistence {
   const romDir = resolveRomDir(opts.romDir);
   const debounceMs = opts.debounceMs ?? 100;
   const log = (msg: string) => {
@@ -97,7 +94,7 @@ export function createPersistence(
   let autoSnapshotWarned = false;
 
   async function writeAtomic(absPath: string, bytes: Uint8Array): Promise<void> {
-    const tmp = absPath + ".tmp";
+    const tmp = `${absPath}.tmp`;
     try {
       await writeFile(tmp, bytes);
       await rename(tmp, absPath);
@@ -118,7 +115,7 @@ export function createPersistence(
       pendingBytes = undefined;
       return;
     }
-    const savPath = path.join(romDir, stripGba(pendingTarget) + ".sav");
+    const savPath = path.join(romDir, `${stripGba(pendingTarget)}.sav`);
     const bytes = pendingBytes;
     pendingBytes = undefined;
     try {
@@ -175,7 +172,7 @@ export function createPersistence(
 
   async function writeLast(basename: string): Promise<void> {
     const lastPath = path.join(romDir, ".last");
-    await writeAtomic(lastPath, Buffer.from(basename + "\n", "utf8"));
+    await writeAtomic(lastPath, Buffer.from(`${basename}\n`, "utf8"));
   }
 
   /** True while loadRom() is switching ROMs — blocks auto-snapshots from
@@ -187,7 +184,7 @@ export function createPersistence(
   async function snapshot(): Promise<void> {
     if (!currentBasename || loading) return;
     const bytes = emulator.saveState();
-    const statePath = path.join(romDir, stripGba(currentBasename) + ".state");
+    const statePath = path.join(romDir, `${stripGba(currentBasename)}.state`);
     // Serialize on the shared write chain: concurrent snapshot() callers
     // (30 s auto-snapshot, onPause, ROM switch, session_shutdown) share the
     // same `.state.tmp` path, so an overlap can rename the other writer's
@@ -206,9 +203,7 @@ export function createPersistence(
     }
   }
 
-  async function loadRom(
-    basename: string,
-  ): Promise<{ romPath: string; restoredState: boolean }> {
+  async function loadRom(basename: string): Promise<{ romPath: string; restoredState: boolean }> {
     if (basename.includes("/") || basename.includes("\\")) {
       throw new Error(`[pi-extension-gba] basename must not contain path separators: ${basename}`);
     }
@@ -231,8 +226,8 @@ export function createPersistence(
     loadingBasename = basename;
     try {
       const romPath = path.join(romDir, basename);
-      const savPath = path.join(romDir, stripGba(basename) + ".sav");
-      const statePath = path.join(romDir, stripGba(basename) + ".state");
+      const savPath = path.join(romDir, `${stripGba(basename)}.sav`);
+      const statePath = path.join(romDir, `${stripGba(basename)}.state`);
 
       let seededSavBytes: Uint8Array | undefined;
       if (await pathExists(savPath)) {
@@ -325,7 +320,7 @@ export function createPersistence(
 
   async function clearState(): Promise<void> {
     if (!currentBasename) return;
-    const statePath = path.join(romDir, stripGba(currentBasename) + ".state");
+    const statePath = path.join(romDir, `${stripGba(currentBasename)}.state`);
     try {
       await unlink(statePath);
     } catch (e) {

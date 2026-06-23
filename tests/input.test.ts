@@ -2,8 +2,9 @@
  * Tests for classifyGbaKey — the shared key-classification helper.
  * GbaFocusEditor and createGbaFocusMode have been removed (dead code).
  */
-import { test } from "node:test";
+
 import assert from "node:assert/strict";
+import { test } from "node:test";
 
 import { classifyGbaKey } from "../src/input.js";
 

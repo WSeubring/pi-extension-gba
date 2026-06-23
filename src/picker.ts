@@ -1,7 +1,6 @@
-import { SelectList } from "@mariozechner/pi-tui";
+import type { ExtensionCommandContext, Theme } from "@mariozechner/pi-coding-agent";
 import type { SelectItem, SelectListTheme } from "@mariozechner/pi-tui";
-import type { ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
-import type { Theme } from "@mariozechner/pi-coding-agent";
+import { SelectList } from "@mariozechner/pi-tui";
 
 export interface PickerResult {
   cancelled: boolean;
@@ -18,10 +17,7 @@ function themeAdapter(theme: Theme): SelectListTheme {
   };
 }
 
-export async function showRomPicker(
-  ctx: ExtensionCommandContext,
-  roms: string[],
-): Promise<PickerResult> {
+export async function showRomPicker(ctx: ExtensionCommandContext, roms: string[]): Promise<PickerResult> {
   return ctx.ui.custom<PickerResult>(
     (_tui, theme, _kb, done) => {
       const items: SelectItem[] = roms.map((r) => ({ value: r, label: r }));

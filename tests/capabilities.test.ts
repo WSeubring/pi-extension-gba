@@ -1,8 +1,7 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-
-import { detectCapabilities, probeAudioBackend, __setCapabilitiesForTest } from "../src/capabilities.js";
+import { test } from "node:test";
 import type { ProbeSpawn } from "../src/capabilities.js";
+import { __setCapabilitiesForTest, detectCapabilities, probeAudioBackend } from "../src/capabilities.js";
 
 test("detectCapabilities: kittyGraphics true when images=kitty", () => {
   __setCapabilitiesForTest({ images: "kitty" });

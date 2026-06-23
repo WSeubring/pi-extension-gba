@@ -34,7 +34,7 @@
 
 import { closeSync, existsSync, openSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import type { Component } from "@mariozechner/pi-tui";
+import type { Component, TUI } from "@mariozechner/pi-tui";
 import {
   allocateImageId,
   calculateImageRows,
@@ -43,9 +43,8 @@ import {
   isKeyRelease,
   matchesKey,
 } from "@mariozechner/pi-tui";
-import type { TUI } from "@mariozechner/pi-tui";
-import type { ButtonSink, GbaButton } from "./types.js";
 import { classifyGbaKey } from "./input.js";
+import type { ButtonSink, GbaButton } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -77,18 +76,16 @@ const FOOTER_ROWS = 3;
 const HEIGHT_RATIO = 0.9;
 
 /** PI_GBA_RENDER_TRACE=1 → stderr-log placement pins + input bytes. */
-const RENDER_TRACE = process.env["PI_GBA_RENDER_TRACE"] === "1";
+const RENDER_TRACE = process.env.PI_GBA_RENDER_TRACE === "1";
 
 // ---------------------------------------------------------------------------
 // Raw-file path resolution
 // ---------------------------------------------------------------------------
 
 function resolveRawDir(): string {
-  const candidates = [
-    process.env["TMPDIR"],
-    "/dev/shm",
-    "/tmp",
-  ].filter((v): v is string => typeof v === "string" && v.length > 0);
+  const candidates = [process.env.TMPDIR, "/dev/shm", "/tmp"].filter(
+    (v): v is string => typeof v === "string" && v.length > 0,
+  );
   for (const candidate of candidates) {
     try {
       if (existsSync(candidate)) return candidate;
@@ -174,12 +171,15 @@ interface KittyLayout {
   availableRows: number;
 }
 
-function computeLayout(
-  widthCols: number,
-  terminalRows: number,
-  widthPx: number,
-  heightPx: number,
-): KittyLayout {
+/** One half of the double-buffer: a Kitty image id backed by a raw RGBA file. */
+interface DoubleBufferSlot {
+  imageId: number;
+  path: string;
+  path64: string;
+  fd: number | null;
+}
+
+function computeLayout(widthCols: number, terminalRows: number, widthPx: number, heightPx: number): KittyLayout {
   const availableRows = Math.max(1, terminalRows - FOOTER_ROWS);
   const maxRows = Math.max(1, Math.floor(availableRows * HEIGHT_RATIO));
 
@@ -233,14 +233,9 @@ export class GbaGameComponent implements Component {
    * idiom in Ghostty 1.3.1 (probe 2026-06-09: alternate-id a=T + delete-old
    * → clean swap; the Kitty animation protocol a=f/a=a is NOT supported).
    */
-  private readonly slots: Array<{
-    imageId: number;
-    path: string;
-    path64: string;
-    fd: number | null;
-  }>;
+  private readonly slots: readonly [DoubleBufferSlot, DoubleBufferSlot];
   /** Slot the NEXT frame will be written to (flips every frame). */
-  private slotIdx = 0;
+  private slotIdx: 0 | 1 = 0;
   /** Image id currently on screen (delete target for the next swap). */
   private visibleImageId: number | undefined;
 
@@ -265,7 +260,7 @@ export class GbaGameComponent implements Component {
     this.done = done;
     this.buttonStates = makeButtonStates();
     const dir = resolveRawDir();
-    this.slots = [0, 1].map(() => {
+    const makeSlot = (): DoubleBufferSlot => {
       const imageId = allocateImageId();
       const path = rawFilePath(dir, imageId);
       return {
@@ -274,7 +269,8 @@ export class GbaGameComponent implements Component {
         path64: Buffer.from(path).toString("base64"),
         fd: null,
       };
-    });
+    };
+    this.slots = [makeSlot(), makeSlot()];
   }
 
   // ---------------------------------------------------------------------------
@@ -299,12 +295,7 @@ export class GbaGameComponent implements Component {
     }
     this.lastRenderWidth = width;
 
-    const layout = computeLayout(
-      width,
-      this.tui.terminal.rows,
-      this.latestWidthPx || 480,
-      this.latestHeightPx || 320,
-    );
+    const layout = computeLayout(width, this.tui.terminal.rows, this.latestWidthPx || 480, this.latestHeightPx || 320);
 
     const lines: string[] = [];
     for (let i = 0; i < layout.availableRows; i += 1) {
@@ -330,12 +321,7 @@ export class GbaGameComponent implements Component {
     const width = this.lastRenderWidth;
     if (width <= 0) return;
 
-    const layout = computeLayout(
-      width,
-      this.tui.terminal.rows,
-      this.latestWidthPx,
-      this.latestHeightPx,
-    );
+    const layout = computeLayout(width, this.tui.terminal.rows, this.latestWidthPx, this.latestHeightPx);
 
     if (layout.cols !== this.cachedCols || layout.rows !== this.cachedRows) {
       this.cachedCols = layout.cols;
@@ -344,7 +330,7 @@ export class GbaGameComponent implements Component {
       this.tui.requestRender();
     }
 
-    const slot = this.slots[this.slotIdx]!;
+    const slot = this.slots[this.slotIdx];
     this.slotIdx = this.slotIdx === 0 ? 1 : 0;
     try {
       if (slot.fd === null) {
@@ -387,8 +373,8 @@ export class GbaGameComponent implements Component {
       this.rawVersion += 1;
       process.stderr.write(
         `[pi-gba-trace] pin v=${this.rawVersion} width=${width} terminalRows=${totalRows} ` +
-        `layout=${layout.cols}x${layout.rows} placeRow=${placeRow} ` +
-        `imagePx=${this.latestWidthPx}x${this.latestHeightPx} imageId=${slot.imageId}\n`,
+          `layout=${layout.cols}x${layout.rows} placeRow=${placeRow} ` +
+          `imagePx=${this.latestWidthPx}x${this.latestHeightPx} imageId=${slot.imageId}\n`,
       );
     }
   }
@@ -542,8 +528,7 @@ export class GbaGameComponent implements Component {
   /** Restore the unwrapped terminal.write (dispose path). */
   private removeWriteHook(): void {
     if (!this.origWrite) return;
-    (this.tui.terminal as unknown as { write: (data: string) => void }).write =
-      this.origWrite;
+    (this.tui.terminal as unknown as { write: (data: string) => void }).write = this.origWrite;
     this.origWrite = undefined;
   }
 
@@ -553,7 +538,7 @@ export class GbaGameComponent implements Component {
 
   __getImageId(): number | undefined {
     if (this.disposed) return undefined;
-    return this.visibleImageId ?? this.slots[0]!.imageId;
+    return this.visibleImageId ?? this.slots[0]?.imageId;
   }
 
   // ---------------------------------------------------------------------------

@@ -6,36 +6,35 @@
  * via WidgetRenderBackend; pi owns the rest of the screen.
  */
 
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-  ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Component, TUI } from "@mariozechner/pi-tui";
 import { isKeyRelease, matchesKey } from "@mariozechner/pi-tui";
-import { createEmulator } from "./emulator.js";
-import type { Emulator } from "./emulator.js";
-import { createRenderer } from "./render.js";
-import type { EmulatorLike, RenderControllerWithSwap } from "./render.js";
-import type { RenderController } from "./lifecycle.js";
-import type { Lifecycle } from "./lifecycle.js";
+import type { GbaCapabilities } from "./capabilities.js";
+import { detectCapabilities } from "./capabilities.js";
+import { registerAll } from "./commands.js";
 import type { GbaConfig } from "./config.js";
 import { resolveConfig } from "./config.js";
-import type { GbaCapabilities } from "./capabilities.js";
+import type { Emulator } from "./emulator.js";
+import { createEmulator } from "./emulator.js";
+import { classifyGbaKey } from "./input.js";
+import type { Lifecycle, RenderController } from "./lifecycle.js";
 import type { Persistence } from "./persistence.js";
 import { createPersistence } from "./persistence.js";
-import { registerAll } from "./commands.js";
-import { detectCapabilities } from "./capabilities.js";
-import { classifyGbaKey } from "./input.js";
+import type { EmulatorLike, RenderControllerWithSwap } from "./render.js";
+import { createRenderer } from "./render.js";
 import type { ButtonSink, GbaButton } from "./types.js";
 
 const NOOP_LIFECYCLE: Lifecycle = {
   attach() {},
   detach() {},
   manualPauseToggle() {},
-  isRunning() { return false; },
+  isRunning() {
+    return false;
+  },
   onRomLoad() {},
-  isCrashed() { return false; },
+  isCrashed() {
+    return false;
+  },
   acknowledgeCrash() {},
 };
 
@@ -117,7 +116,11 @@ export class InputOverlayComponent implements Component {
     if (this.disposed) return;
     this.disposed = true;
     for (const button of this.held) {
-      try { this.sink.release(button); } catch { /* best-effort */ }
+      try {
+        this.sink.release(button);
+      } catch {
+        /* best-effort */
+      }
     }
     this.held.clear();
   }
@@ -150,21 +153,26 @@ export function wireMinimal(
   function destroyEmulator(): void {
     if (destroyed) return;
     destroyed = true;
-    try { emulator.destroy(); } catch { /* best-effort */ }
+    try {
+      emulator.destroy();
+    } catch {
+      /* best-effort */
+    }
   }
 
   function notifyUnsupported(ctx: ExtensionContext): void {
-    ctx.ui.notify(
-      "GBA: this terminal does not support Kitty graphics — extension disabled",
-      "warning",
-    );
+    ctx.ui.notify("GBA: this terminal does not support Kitty graphics — extension disabled", "warning");
   }
 
   let activeRender: RenderControllerWithSwap | undefined;
 
   function destroyRender(): void {
     if (activeRender === undefined) return;
-    try { activeRender.destroy(); } catch { /* best-effort */ }
+    try {
+      activeRender.destroy();
+    } catch {
+      /* best-effort */
+    }
     activeRender = undefined;
   }
 
@@ -180,8 +188,7 @@ export function wireMinimal(
       // N2: emulator implements ButtonSink directly (Emulator implements ButtonSink
       // per src/emulator.ts:61) — no cast needed.
       await ctx.ui.custom(
-        (_tui: TUI, _theme, _keybindings, done) =>
-          new InputOverlayComponent(emulator, () => done(undefined)),
+        (_tui: TUI, _theme, _keybindings, done) => new InputOverlayComponent(emulator, () => done(undefined)),
         { overlay: true, overlayOptions: { width: 1, anchor: "center" } },
       );
     } catch (err) {
@@ -234,10 +241,22 @@ export function wireMinimal(
   pi.on("session_shutdown", async () => {
     // Best-effort save-state snapshot first (mirrors the full-mode shutdown
     // in index.ts) so a clean exit doesn't lose up to 30s of progress.
-    try { await persistence.snapshot(); } catch { /* best-effort */ }
+    try {
+      await persistence.snapshot();
+    } catch {
+      /* best-effort */
+    }
     destroyRender();
-    try { await persistence.flushPending(); } catch { /* best-effort */ }
-    try { persistence.destroy(); } catch { /* best-effort */ }
+    try {
+      await persistence.flushPending();
+    } catch {
+      /* best-effort */
+    }
+    try {
+      persistence.destroy();
+    } catch {
+      /* best-effort */
+    }
     destroyEmulator();
   });
 }

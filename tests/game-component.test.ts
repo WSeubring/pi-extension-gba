@@ -1,17 +1,17 @@
+import { defined } from "./harness/assert.js";
 /**
  * Phase 9b tests — GbaGameComponent + classifyGbaKey.
  * Design ref: docs/design/phase-9b-custom-game-component.md §Test plan
  */
-import { test } from "node:test";
+
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
-
+import { test } from "node:test";
+import type { TUI } from "@mariozechner/pi-tui";
+import { setCellDimensions } from "@mariozechner/pi-tui";
 import { GbaGameComponent } from "../src/game-component.js";
 import { classifyGbaKey } from "../src/input.js";
 import type { ButtonSink, GbaButton } from "../src/types.js";
-import type { TUI } from "@mariozechner/pi-tui";
-import { setCellDimensions } from "@mariozechner/pi-tui";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -31,8 +31,12 @@ interface SinkCall {
 function makeMockSink(): { sink: ButtonSink; calls: SinkCall[] } {
   const calls: SinkCall[] = [];
   const sink: ButtonSink = {
-    press(button) { calls.push({ kind: "press", button }); },
-    release(button) { calls.push({ kind: "release", button }); },
+    press(button) {
+      calls.push({ kind: "press", button });
+    },
+    release(button) {
+      calls.push({ kind: "release", button });
+    },
   };
   return { sink, calls };
 }
@@ -43,7 +47,9 @@ function makeMockTui(rows = 40): { tui: TUI; written: string[] } {
   const tui = {
     terminal: {
       rows,
-      write(data: string) { written.push(data); },
+      write(data: string) {
+        written.push(data);
+      },
     },
     requestRender() {},
   } as unknown as TUI;
@@ -61,11 +67,7 @@ function makeGreenRgba(widthPx: number, heightPx: number): Uint8Array {
   return buf;
 }
 
-function makeComponent(
-  sink: ButtonSink,
-  tui: TUI,
-  done: (r: undefined) => void = () => {},
-): GbaGameComponent {
+function makeComponent(sink: ButtonSink, tui: TUI, done: (r: undefined) => void = () => {}): GbaGameComponent {
   return new GbaGameComponent(tui, { emulator: {}, sink, scale: SCALE as 2 }, done);
 }
 
@@ -88,14 +90,14 @@ test("direct-pin: acceptFrame writes Kitty placement to terminal at absolute coo
 
   const pin = written.find((w) => w.includes("\x1b_G"));
   assert.ok(pin !== undefined, "acceptFrame must write the Kitty transmit directly to the terminal");
-  assert.ok(pin!.startsWith("\x1b7"), "pin must save the cursor first (DECSC)");
-  assert.ok(pin!.endsWith("\x1b8"), "pin must restore the cursor last (DECRC)");
-  assert.match(pin!, /\x1b7\x1b\[\d+;1H/, "pin must move to an absolute row before transmitting");
-  assert.ok(pin!.includes(`i=${id}`), `pin must contain i=${id}`);
-  assert.ok(pin!.includes("a=T"), "pin must include a=T");
-  assert.ok(pin!.includes("t=f"), "pin must declare t=f (file transport)");
-  assert.ok(pin!.includes("p=1"), "pin must reuse placement id 1 for atomic replace");
-  assert.ok(!pin!.includes("S="), "pin must not carry S= (Ghostty rejects it)");
+  assert.ok(pin?.startsWith("\x1b7"), "pin must save the cursor first (DECSC)");
+  assert.ok(pin?.endsWith("\x1b8"), "pin must restore the cursor last (DECRC)");
+  assert.match(defined(pin, "pin"), /\x1b7\x1b\[\d+;1H/, "pin must move to an absolute row before transmitting");
+  assert.ok(pin?.includes(`i=${id}`), `pin must contain i=${id}`);
+  assert.ok(pin?.includes("a=T"), "pin must include a=T");
+  assert.ok(pin?.includes("t=f"), "pin must declare t=f (file transport)");
+  assert.ok(pin?.includes("p=1"), "pin must reuse placement id 1 for atomic replace");
+  assert.ok(!pin?.includes("S="), "pin must not carry S= (Ghostty rejects it)");
 
   comp.dispose();
 });
@@ -114,17 +116,22 @@ test("render(): static lines only — no Kitty bytes, identical across frames", 
   comp.acceptFrame(rgba, OUT_W, OUT_H);
 
   const first = comp.render(80);
-  assert.ok(first.every((l) => !l.includes("\x1b_G")),
-    "render must never embed the Kitty transmit (image is pinned directly)");
-  assert.ok(first[first.length - 1]!.includes("GBA |"), "last line is the static footer");
+  assert.ok(
+    first.every((l) => !l.includes("\x1b_G")),
+    "render must never embed the Kitty transmit (image is pinned directly)",
+  );
+  assert.ok(first[first.length - 1]?.includes("GBA |"), "last line is the static footer");
   for (let i = 0; i < first.length - 1; i++) {
     assert.strictEqual(first[i], "", `line ${i} must be empty`);
   }
 
   comp.acceptFrame(rgba, OUT_W, OUT_H);
   const second = comp.render(80);
-  assert.deepStrictEqual(second, first,
-    "render output must be byte-identical across frames so pi-tui's diff never repaints it");
+  assert.deepStrictEqual(
+    second,
+    first,
+    "render output must be byte-identical across frames so pi-tui's diff never repaints it",
+  );
 
   comp.dispose();
 });
@@ -182,7 +189,7 @@ test("dispose cleanup: held buttons released, deleteKittyImage emitted, raw file
   const { sink, calls } = makeMockSink();
   const { tui, written } = makeMockTui();
   const comp = makeComponent(sink, tui);
-  const id = comp.__getImageId()!;
+  const id = defined(comp.__getImageId(), "image id");
 
   // Hold 3 buttons by pressing them.
   comp.handleInput("z"); // → press "a"
@@ -217,7 +224,10 @@ test("exit on alt+g legacy: done(undefined) is called", () => {
   const { tui } = makeMockTui();
   let doneCalled = 0;
   let doneArg: unknown = "sentinel";
-  const comp = makeComponent(sink, tui, (r) => { doneCalled++; doneArg = r; });
+  const comp = makeComponent(sink, tui, (r) => {
+    doneCalled++;
+    doneArg = r;
+  });
 
   comp.handleInput("\u001bg"); // alt+g legacy
   assert.strictEqual(doneCalled, 1, "done must be called once");
@@ -230,7 +240,10 @@ test("exit on alt+g Kitty CSI-u: done(undefined) is called", () => {
   const { sink } = makeMockSink();
   const { tui } = makeMockTui();
   let doneCalled = 0;
-  const comp = makeComponent(sink, tui, (r) => { doneCalled++; void r; });
+  const comp = makeComponent(sink, tui, (r) => {
+    doneCalled++;
+    void r;
+  });
 
   comp.handleInput("\x1b[103;3u"); // alt+g Kitty protocol
   assert.strictEqual(doneCalled, 1, "done must be called on Kitty alt+g");
@@ -242,7 +255,10 @@ test("exit on ctrl+c: done(undefined) is called", () => {
   const { sink } = makeMockSink();
   const { tui } = makeMockTui();
   let doneCalled = 0;
-  const comp = makeComponent(sink, tui, (r) => { doneCalled++; void r; });
+  const comp = makeComponent(sink, tui, (r) => {
+    doneCalled++;
+    void r;
+  });
 
   comp.handleInput("\x03"); // ctrl+c
   assert.strictEqual(doneCalled, 1, "done must be called on ctrl+c");
@@ -348,9 +364,9 @@ test("computeLayout uses getCellDimensions: square cells give more rows than 2:1
     // The pinned transmit carries the row count in its r= param.
     const pin = written.find((w) => w.includes("\x1b_G"));
     assert.ok(pin !== undefined, "pin must be written");
-    const rMatch = pin!.match(/,r=(\d+),/);
+    const rMatch = pin?.match(/,r=(\d+),/);
     assert.ok(rMatch, "pin must carry r= rows param");
-    const imageRows = Number(rMatch![1]);
+    const imageRows = Number(rMatch?.[1]);
 
     // With real cell dims (square), expected ~32 image rows; fallback ~27.
     // Assert we're above the fallback to confirm the helper path is active.
@@ -389,8 +405,8 @@ test("computeLayout: when the height cap binds, cols shrink proportionally (no h
     // rows = 6, cols = floor(120 * 6 / 80) = 9.
     const pin = written.find((w) => w.includes("\x1b_G"));
     assert.ok(pin !== undefined, "pin must be written");
-    const cols = Number(pin!.match(/,c=(\d+),/)![1]);
-    const rows = Number(pin!.match(/,r=(\d+),/)![1]);
+    const cols = Number(pin?.match(/,c=(\d+),/)?.[1]);
+    const rows = Number(pin?.match(/,r=(\d+),/)?.[1]);
     assert.strictEqual(rows, 6, "rows must be capped to maxRows");
     assert.strictEqual(cols, 9, "cols must shrink proportionally with the row cap");
 
@@ -410,10 +426,16 @@ test("handleInput after dispose is a no-op: no sink calls, no exit, no throw", (
   let doneCalled = 0;
   // Sink that throws like a destroyed emulator (EmulatorNotLoadedError path).
   const throwingSink: ButtonSink = {
-    press() { throw new Error("Emulator has no ROM loaded"); },
-    release() { throw new Error("Emulator has no ROM loaded"); },
+    press() {
+      throw new Error("Emulator has no ROM loaded");
+    },
+    release() {
+      throw new Error("Emulator has no ROM loaded");
+    },
   };
-  const comp = makeComponent(throwingSink, tui, () => { doneCalled++; });
+  const comp = makeComponent(throwingSink, tui, () => {
+    doneCalled++;
+  });
 
   comp.dispose();
 
@@ -435,10 +457,12 @@ test("dispose with throwing sink.release still deletes Kitty images and unlinks 
   // emulator — dispose must survive it and still clean up the slots.
   const throwingSink: ButtonSink = {
     press() {},
-    release() { throw new Error("Emulator has no ROM loaded"); },
+    release() {
+      throw new Error("Emulator has no ROM loaded");
+    },
   };
   const comp = makeComponent(throwingSink, tui);
-  const id = comp.__getImageId()!;
+  const id = defined(comp.__getImageId(), "image id");
 
   comp.render(80);
   comp.acceptFrame(makeGreenRgba(OUT_W, OUT_H), OUT_W, OUT_H);
@@ -447,7 +471,9 @@ test("dispose with throwing sink.release still deletes Kitty images and unlinks 
   // The pinned transmit carries the raw file path (base64, t=f transport).
   const pin = written.find((w) => w.includes("\x1b_Ga=T"));
   assert.ok(pin !== undefined, "frame must be pinned before dispose");
-  const rawPath = Buffer.from(pin!.match(/;([A-Za-z0-9+/=]+)\x1b\\/)![1]!, "base64").toString("utf8");
+  const rawPath = Buffer.from(defined(pin?.match(/;([A-Za-z0-9+/=]+)\x1b\\/)?.[1], "base64 path"), "base64").toString(
+    "utf8",
+  );
   assert.ok(existsSync(rawPath), "raw frame file must exist before dispose");
 
   assert.doesNotThrow(() => comp.dispose());
@@ -483,8 +509,11 @@ test("write-hook: pi-tui flush triggers immediate re-pin; dispose restores write
   // OTHER image id than the previous pin.
   const pins = written.filter((w) => w.includes("\x1b_Ga=T"));
   const idOf = (s: string) => s.match(/,i=(\d+),/)?.[1];
-  assert.notEqual(idOf(pins[pins.length - 1]!), idOf(pins[pins.length - 2]!),
-    "chase pin swaps to the other buffer id");
+  assert.notEqual(
+    idOf(defined(pins[pins.length - 1], "last pin")),
+    idOf(defined(pins[pins.length - 2], "second-to-last pin")),
+    "chase pin swaps to the other buffer id",
+  );
 
   comp.dispose();
   const before = written.length;
