@@ -5,9 +5,10 @@ import path from "node:path";
 import { test } from "node:test";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { CommandDeps } from "../src/commands.js";
-import { handleConfig, registerAll } from "../src/commands.js";
+import { registerAll } from "../src/commands.js";
 import type { GbaConfig } from "../src/config.js";
 import { loadConfigFile, popQueuedWarning, saveConfigFile } from "../src/config.js";
+import { handleConfig } from "../src/config-menu.js";
 import type { Lifecycle, RenderController } from "../src/lifecycle.js";
 import type { Persistence } from "../src/persistence.js";
 import { defined } from "./harness/assert.js";
@@ -184,7 +185,7 @@ test("menu flow: pick Scale → 3x → saves scale:3 to disk", async () => {
     //   3rd call = main menu → "Close" to exit
     const { ctx, notifyCalls } = makeFakeCtx(["Scale: 2x", "3x", "Close"]);
 
-    await handleConfig(ctx, deps);
+    await handleConfig(ctx, deps.cfg);
 
     // Check in-memory cfg updated
     assert.equal(deps.cfg.scale, 3, "in-memory cfg.scale should be 3");
@@ -207,7 +208,7 @@ test("menu cancel: select returns undefined → no write, no notify", async () =
     // First select returns undefined (user dismissed)
     const { ctx, notifyCalls } = makeFakeCtx([undefined]);
 
-    await handleConfig(ctx, deps);
+    await handleConfig(ctx, deps.cfg);
 
     // No save should have happened
     const loaded = await loadConfigFile();
@@ -223,7 +224,7 @@ test("menu flow: toggle autoFocusOnAgentStart off → saved", async () => {
     const deps = makeDeps();
     const { ctx } = makeFakeCtx(["Auto-focus on agent_start: on", "off", "Close"]);
 
-    await handleConfig(ctx, deps);
+    await handleConfig(ctx, deps.cfg);
 
     assert.equal(deps.cfg.autoFocusOnAgentStart, false, "autoFocusOnAgentStart should be false");
     const loaded = await loadConfigFile();
@@ -237,7 +238,7 @@ test("menu flow: change debounce to 1200 → saved", async () => {
     const deps = makeDeps();
     const { ctx } = makeFakeCtx(["Auto-focus debounce: 500 ms", "Close"], ["1200"]);
 
-    await handleConfig(ctx, deps);
+    await handleConfig(ctx, deps.cfg);
 
     assert.equal(deps.cfg.autoFocusDebounceMs, 1200, "autoFocusDebounceMs should be 1200");
     const loaded = await loadConfigFile();
@@ -251,7 +252,7 @@ test("menu flow: invalid debounce input → warning, loop continues, then Close"
     const deps = makeDeps();
     const { ctx, notifyCalls } = makeFakeCtx(["Auto-focus debounce: 500 ms", "Close"], ["not-a-number"]);
 
-    await handleConfig(ctx, deps);
+    await handleConfig(ctx, deps.cfg);
 
     const warnNotify = notifyCalls.find((n) => n.type === "warning" && n.message.includes("invalid"));
     assert.ok(warnNotify, "warning should be emitted for invalid input");
@@ -270,7 +271,7 @@ test("menu flow: empty debounce input → warning, no save", async () => {
       ["", "   "],
     );
 
-    await handleConfig(ctx, deps);
+    await handleConfig(ctx, deps.cfg);
 
     const warnings = notifyCalls.filter((n) => n.type === "warning" && n.message.includes("invalid"));
     assert.equal(warnings.length, 2, "warning emitted for both empty and whitespace input");
@@ -296,7 +297,7 @@ test("env override (PI_GBA_AUDIO=1) not persisted when saving an unrelated key",
 
       // Save an unrelated key (debounce) via the config menu.
       const { ctx } = makeFakeCtx(["Auto-focus debounce: 500 ms", "Close"], ["1200"]);
-      await handleConfig(ctx, deps);
+      await handleConfig(ctx, deps.cfg);
 
       assert.equal(deps.cfg.audio, true, "runtime cfg keeps the env override");
       const loaded = await loadConfigFile();
