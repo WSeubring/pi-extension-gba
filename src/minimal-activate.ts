@@ -16,6 +16,7 @@ import type { GbaConfig } from "./config.js";
 import { resolveConfig } from "./config.js";
 import type { Emulator } from "./emulator.js";
 import { createEmulator } from "./emulator.js";
+import { HeldButtons } from "./held-buttons.js";
 import { classifyGbaKey } from "./input.js";
 import type { Lifecycle, RenderController } from "./lifecycle.js";
 import { createUnsupportedNotifier } from "./messages.js";
@@ -23,7 +24,7 @@ import type { Persistence } from "./persistence.js";
 import { createPersistence } from "./persistence.js";
 import type { EmulatorLike, RenderControllerWithSwap } from "./render.js";
 import { createRenderer } from "./render.js";
-import type { ButtonSink, GbaButton } from "./types.js";
+import type { ButtonSink } from "./types.js";
 
 const NOOP_LIFECYCLE: Lifecycle = {
   attach() {},
@@ -57,13 +58,16 @@ const NOOP_RENDER: RenderController = {
  */
 export class InputOverlayComponent implements Component {
   readonly wantsKeyRelease = true;
-  private readonly held = new Set<GbaButton>();
+  private readonly buttons: HeldButtons;
   private disposed = false;
 
   constructor(
-    private readonly sink: ButtonSink,
+    sink: ButtonSink,
     private readonly done: () => void,
-  ) {}
+  ) {
+    // No decay timer: this overlay gets reliable key-release events.
+    this.buttons = new HeldButtons(sink, 0);
+  }
 
   render(_width: number): string[] {
     return [""];
@@ -95,16 +99,10 @@ export class InputOverlayComponent implements Component {
     const event = classifyGbaKey(data);
     switch (event.kind) {
       case "press":
-        if (!this.held.has(event.button)) {
-          this.sink.press(event.button);
-          this.held.add(event.button);
-        }
+        this.buttons.press(event.button);
         break;
       case "release":
-        if (this.held.has(event.button)) {
-          this.sink.release(event.button);
-          this.held.delete(event.button);
-        }
+        this.buttons.release(event.button);
         break;
       case "repeat":
       case "passthrough":
@@ -116,14 +114,7 @@ export class InputOverlayComponent implements Component {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    for (const button of this.held) {
-      try {
-        this.sink.release(button);
-      } catch {
-        /* best-effort */
-      }
-    }
-    this.held.clear();
+    this.buttons.releaseAll();
   }
 }
 

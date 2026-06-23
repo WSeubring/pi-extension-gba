@@ -1,8 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Emulator } from "./emulator.js";
-import type { GbaButton } from "./types.js";
-
-const GBA_BUTTONS: GbaButton[] = ["up", "down", "left", "right", "a", "b", "l", "r", "start", "select"];
+import { GBA_BUTTONS } from "./types.js";
 
 // Minimal interface lifecycle consumes from Phase 2's RenderController.
 // Phase 2's RenderController is a superset; this interface is the contract.

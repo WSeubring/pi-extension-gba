@@ -43,8 +43,9 @@ import {
   isKeyRelease,
   matchesKey,
 } from "@mariozechner/pi-tui";
+import { HeldButtons } from "./held-buttons.js";
 import { classifyGbaKey } from "./input.js";
-import type { ButtonSink, GbaButton } from "./types.js";
+import type { ButtonSink } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -98,30 +99,6 @@ function resolveRawDir(): string {
 
 function rawFilePath(dir: string, imageId: number): string {
   return join(dir, `pi-gba-${imageId}.raw`);
-}
-
-// ---------------------------------------------------------------------------
-// ButtonState (identical shape to input.ts)
-// ---------------------------------------------------------------------------
-
-interface ButtonState {
-  held: boolean;
-  decayTimer?: ReturnType<typeof setTimeout>;
-}
-
-function makeButtonStates(): Record<GbaButton, ButtonState> {
-  return {
-    up: { held: false },
-    down: { held: false },
-    left: { held: false },
-    right: { held: false },
-    a: { held: false },
-    b: { held: false },
-    l: { held: false },
-    r: { held: false },
-    start: { held: false },
-    select: { held: false },
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +216,7 @@ export class GbaGameComponent implements Component {
   /** Image id currently on screen (delete target for the next swap). */
   private visibleImageId: number | undefined;
 
-  private readonly buttonStates: Record<GbaButton, ButtonState>;
+  private readonly buttons: HeldButtons;
   private disposed = false;
 
   /** Trace counter (PI_GBA_RENDER_TRACE) — first few placements logged. */
@@ -258,7 +235,9 @@ export class GbaGameComponent implements Component {
     this.tui = tui;
     this.sink = _deps.sink;
     this.done = done;
-    this.buttonStates = makeButtonStates();
+    // Terminals don't reliably send key-up; the decay timer auto-releases a
+    // stuck button after PRESS_DECAY_MS (see HeldButtons).
+    this.buttons = new HeldButtons(this.sink, PRESS_DECAY_MS);
     const dir = resolveRawDir();
     const makeSlot = (): DoubleBufferSlot => {
       const imageId = allocateImageId();
@@ -413,13 +392,13 @@ export class GbaGameComponent implements Component {
     const event = classifyGbaKey(data);
     switch (event.kind) {
       case "press":
-        this.pressButton(event.button);
+        this.buttons.press(event.button);
         break;
       case "release":
-        this.releaseButton(event.button);
+        this.buttons.release(event.button);
         break;
       case "repeat":
-        this.armDecayTimer(event.button);
+        this.buttons.repeat(event.button);
         break;
       case "passthrough":
       case "drop":
@@ -441,7 +420,7 @@ export class GbaGameComponent implements Component {
     this.removeWriteHook();
 
     // Release all held buttons.
-    this.releaseAllAndClearTimers();
+    this.buttons.releaseAll();
 
     // Delete both buffered Kitty images from the terminal, close fds,
     // unlink the raw files.
@@ -539,64 +518,5 @@ export class GbaGameComponent implements Component {
   __getImageId(): number | undefined {
     if (this.disposed) return undefined;
     return this.visibleImageId ?? this.slots[0]?.imageId;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Private button helpers
-  // ---------------------------------------------------------------------------
-
-  releaseAllAndClearTimers(): void {
-    for (const button of Object.keys(this.buttonStates) as GbaButton[]) {
-      const state = this.buttonStates[button];
-      if (state.decayTimer !== undefined) {
-        clearTimeout(state.decayTimer);
-        state.decayTimer = undefined;
-      }
-      if (state.held) {
-        try {
-          this.sink.release(button);
-        } catch {
-          // best-effort: continue releasing remaining buttons — a throwing
-          // sink (emulator already destroyed) must not abort dispose() and
-          // strand Kitty image deletes / fd closes / raw-file unlinks.
-        }
-        state.held = false;
-      }
-    }
-  }
-
-  private pressButton(button: GbaButton): void {
-    const state = this.buttonStates[button];
-    if (!state.held) {
-      this.sink.press(button);
-      state.held = true;
-    }
-    this.armDecayTimer(button);
-  }
-
-  private releaseButton(button: GbaButton): void {
-    const state = this.buttonStates[button];
-    if (state.decayTimer !== undefined) {
-      clearTimeout(state.decayTimer);
-      state.decayTimer = undefined;
-    }
-    if (state.held) {
-      this.sink.release(button);
-      state.held = false;
-    }
-  }
-
-  private armDecayTimer(button: GbaButton): void {
-    const state = this.buttonStates[button];
-    if (state.decayTimer !== undefined) {
-      clearTimeout(state.decayTimer);
-    }
-    state.decayTimer = setTimeout(() => {
-      state.decayTimer = undefined;
-      if (state.held) {
-        this.sink.release(button);
-        state.held = false;
-      }
-    }, PRESS_DECAY_MS);
   }
 }
