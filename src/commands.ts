@@ -174,124 +174,200 @@ async function cmdLoadByName(ctx: ExtensionCommandContext, deps: CommandDeps, to
 // ---- /gba config ------------------------------------------------------------
 
 /**
- * Interactive config menu via ctx.ui.select / ctx.ui.input.
- * Loops until the user picks "Close" or dismisses.
+ * One editable setting in the /gba config menu. Each descriptor owns its menu
+ * label, how it renders its current value, and how it prompts for + validates a
+ * new one — so adding a setting is one table entry instead of six coordinated
+ * edits (label, menu string, prefix-match branch, edit UI, clamp, save).
+ */
+interface Setting {
+  readonly title: string;
+  readonly key: keyof GbaConfig;
+  /** Render the current value for the menu line and the save notification. */
+  format(cfg: GbaConfig): string;
+  /**
+   * Prompt for a new value. Returns the config patch + its display string, or
+   * undefined to leave the setting unchanged (cancelled, or invalid — in which
+   * case the descriptor has already notified).
+   */
+  edit(
+    ctx: ExtensionCommandContext,
+    cfg: GbaConfig,
+  ): Promise<{ patch: Partial<GbaConfig>; display: string } | undefined>;
+  /** When set, editing emits a "requires restart" notice (renderer built once). */
+  readonly restartNoun?: string;
+}
+
+function toggleSetting(key: keyof GbaConfig, title: string, offLabel = "off"): Setting {
+  return {
+    title,
+    key,
+    format: (cfg) => (cfg[key] ? "on" : offLabel),
+    async edit(ctx) {
+      const val = await ctx.ui.select(title, ["on", "off"]);
+      if (val === undefined) return undefined;
+      return { patch: { [key]: val === "on" } as Partial<GbaConfig>, display: val };
+    },
+  };
+}
+
+function numberSetting(
+  key: keyof GbaConfig,
+  title: string,
+  prompt: string,
+  range: { min: number; max: number; rejectBelow?: number },
+  unit: string,
+  invalidMsg: string,
+  restartNoun?: string,
+): Setting {
+  return {
+    title,
+    key,
+    restartNoun,
+    format: (cfg) => `${cfg[key]} ${unit}`,
+    async edit(ctx, cfg) {
+      const raw = await ctx.ui.input(prompt, String(cfg[key]));
+      if (raw === undefined) return undefined;
+      // Number("") is 0 — reject empty/whitespace so a bare Enter doesn't save 0.
+      const num = Number(raw);
+      const floor = range.rejectBelow ?? Number.NEGATIVE_INFINITY;
+      if (raw.trim() === "" || !Number.isFinite(num) || num < floor) {
+        ctx.ui.notify(`GBA config: ${invalidMsg} — not saved`, "warning");
+        return undefined;
+      }
+      const clamped = Math.max(range.min, Math.min(range.max, Math.round(num)));
+      return { patch: { [key]: clamped } as Partial<GbaConfig>, display: String(clamped) };
+    },
+  };
+}
+
+function choiceSetting(
+  key: keyof GbaConfig,
+  title: string,
+  choices: { label: string; value: number | string }[],
+  format: (cfg: GbaConfig) => string,
+  restartNoun?: string,
+): Setting {
+  return {
+    title,
+    key,
+    restartNoun,
+    format,
+    async edit(ctx) {
+      const val = await ctx.ui.select(
+        title,
+        choices.map((c) => c.label),
+      );
+      if (val === undefined) return undefined;
+      const choice = choices.find((c) => c.label === val);
+      if (!choice) return undefined;
+      return { patch: { [key]: choice.value } as Partial<GbaConfig>, display: val };
+    },
+  };
+}
+
+const SETTINGS: Setting[] = [
+  toggleSetting("autoFocusOnAgentStart", "Auto-focus on agent_start"),
+  numberSetting(
+    "autoFocusDebounceMs",
+    "Auto-focus debounce",
+    "Auto-focus debounce (ms, 0–5000)",
+    { min: 0, max: 5000 },
+    "ms",
+    "invalid number",
+  ),
+  toggleSetting("autoRunOnAgentStart", "Auto-run on agent_start"),
+  toggleSetting("autoHideOnAgentEnd", "Auto-hide on agent_end", "off (shrink)"),
+  choiceSetting(
+    "scale",
+    "Scale",
+    [
+      { label: "1x", value: 1 },
+      { label: "2x", value: 2 },
+      { label: "3x", value: 3 },
+    ],
+    (cfg) => `${cfg.scale}x`,
+    "scale",
+  ),
+  numberSetting(
+    "frameRate",
+    "Frame rate",
+    "Frame rate (fps, 1–30)",
+    { min: 1, max: 30, rejectBelow: 1 },
+    "fps",
+    "invalid frame rate",
+    "frameRate",
+  ),
+  toggleSetting("audio", "Audio"),
+];
+
+const RESET_LABEL = "Reset all to defaults…";
+
+/**
+ * Interactive config menu via ctx.ui.select / ctx.ui.input, driven by the
+ * SETTINGS table. Loops until the user picks "Close" or dismisses.
  */
 export async function handleConfig(ctx: ExtensionCommandContext, deps: CommandDeps): Promise<void> {
-  // Work on a mutable copy so we can accumulate changes before save.
-  // The live deps.cfg object is updated via Object.assign after each save.
-  const cfg = deps.cfg;
+  const lineFor = (s: Setting): string => `${s.title}: ${s.format(deps.cfg)}`;
 
   while (true) {
-    const autoFocusLabel = cfg.autoFocusOnAgentStart ? "on" : "off";
-    const autoRunLabel = cfg.autoRunOnAgentStart ? "on" : "off";
-    const autoHideLabel = cfg.autoHideOnAgentEnd ? "on" : "off (shrink)";
-    const audioLabel = cfg.audio ? "on" : "off";
-
-    const menuItems = [
-      `Auto-focus on agent_start: ${autoFocusLabel}`,
-      `Auto-focus debounce: ${cfg.autoFocusDebounceMs} ms`,
-      `Auto-run on agent_start: ${autoRunLabel}`,
-      `Auto-hide on agent_end: ${autoHideLabel}`,
-      `Scale: ${cfg.scale}x`,
-      `Frame rate: ${cfg.frameRate} fps`,
-      `Audio: ${audioLabel}`,
-      "Reset all to defaults…",
-      "Close",
-    ];
-
+    const menuItems = [...SETTINGS.map(lineFor), RESET_LABEL, "Close"];
     const pick = await ctx.ui.select("GBA Config", menuItems);
     if (pick === undefined || pick === "Close") return;
 
-    if (pick.startsWith("Auto-focus on agent_start")) {
-      const val = await ctx.ui.select("Auto-focus on agent_start", ["on", "off"]);
-      if (val === undefined) continue;
-      cfg.autoFocusOnAgentStart = val === "on";
-      await _saveAndNotify(ctx, deps, cfg, "autoFocusOnAgentStart", val);
-    } else if (pick.startsWith("Auto-focus debounce")) {
-      const val = await ctx.ui.input("Auto-focus debounce (ms, 0–5000)", String(cfg.autoFocusDebounceMs));
-      if (val === undefined) continue;
-      // Number("") is 0 — reject empty/whitespace input explicitly so a bare
-      // Enter doesn't silently save autoFocusDebounceMs=0.
-      const num = Number(val);
-      if (val.trim() === "" || !Number.isFinite(num)) {
-        ctx.ui.notify("GBA config: invalid number — not saved", "warning");
-        continue;
-      }
-      cfg.autoFocusDebounceMs = Math.max(0, Math.min(5000, Math.round(num)));
-      await _saveAndNotify(ctx, deps, cfg, "autoFocusDebounceMs", String(cfg.autoFocusDebounceMs));
-    } else if (pick.startsWith("Auto-run on agent_start")) {
-      const val = await ctx.ui.select("Auto-run on agent_start", ["on", "off"]);
-      if (val === undefined) continue;
-      cfg.autoRunOnAgentStart = val === "on";
-      await _saveAndNotify(ctx, deps, cfg, "autoRunOnAgentStart", val);
-    } else if (pick.startsWith("Auto-hide on agent_end")) {
-      const val = await ctx.ui.select("Auto-hide on agent_end", ["on", "off"]);
-      if (val === undefined) continue;
-      cfg.autoHideOnAgentEnd = val === "on";
-      await _saveAndNotify(ctx, deps, cfg, "autoHideOnAgentEnd", val);
-    } else if (pick.startsWith("Scale")) {
-      const val = await ctx.ui.select("Scale", ["1x", "2x", "3x"]);
-      if (val === undefined) continue;
-      const scaleMap: Record<string, 1 | 2 | 3> = { "1x": 1, "2x": 2, "3x": 3 };
-      const newScale = scaleMap[val] ?? 2;
-      cfg.scale = newScale;
-      await _saveAndNotify(ctx, deps, cfg, "scale", val);
-      ctx.ui.notify("GBA config: scale change requires restart to take effect", "info");
-    } else if (pick.startsWith("Frame rate")) {
-      const val = await ctx.ui.input("Frame rate (fps, 1–30)", String(cfg.frameRate));
-      if (val === undefined) continue;
-      const num = Number(val);
-      if (!Number.isFinite(num) || num < 1) {
-        ctx.ui.notify("GBA config: invalid frame rate — not saved", "warning");
-        continue;
-      }
-      cfg.frameRate = Math.max(1, Math.min(30, Math.round(num)));
-      await _saveAndNotify(ctx, deps, cfg, "frameRate", String(cfg.frameRate));
-      ctx.ui.notify("GBA config: frameRate change requires restart to take effect", "info");
-    } else if (pick.startsWith("Audio")) {
-      const val = await ctx.ui.select("Audio", ["on", "off"]);
-      if (val === undefined) continue;
-      cfg.audio = val === "on";
-      await _saveAndNotify(ctx, deps, cfg, "audio", val);
-    } else if (pick.startsWith("Reset all")) {
+    if (pick === RESET_LABEL) {
       const confirmed = await ctx.ui.confirm("Reset GBA config", "Reset all settings to defaults?");
-      if (!confirmed) continue;
-      const prevRomDir = cfg.romDir;
-      await resetConfigFile();
-      const fresh = await resolveConfig();
-      Object.assign(cfg, fresh);
-      Object.assign(deps.cfg, fresh);
-      ctx.ui.notify("GBA config reset to defaults", "info");
-      if (fresh.romDir !== prevRomDir) {
-        ctx.ui.notify("GBA config: romDir change requires restart to take effect", "info");
-      }
+      if (confirmed) await resetConfig(ctx, deps);
+      continue;
+    }
+
+    // Match the exact menu line (no fragile startsWith on a shared prefix).
+    const setting = SETTINGS.find((s) => lineFor(s) === pick);
+    if (!setting) continue;
+
+    const result = await setting.edit(ctx, deps.cfg);
+    if (!result) continue; // cancelled or invalid (descriptor already notified)
+
+    await applyAndSave(ctx, deps, setting.key, result.patch, result.display);
+    if (setting.restartNoun) {
+      ctx.ui.notify(`GBA config: ${setting.restartNoun} change requires restart to take effect`, "info");
     }
   }
 }
 
-async function _saveAndNotify(
+/**
+ * Apply a config patch to the live deps.cfg, clamp once via normalize, persist
+ * only the changed key over the file layer, and notify. The runtime cfg carries
+ * session-scoped env overrides (PI_GBA_AUTO_FOCUS, PI_GBA_AUDIO); persisting the
+ * single key avoids baking those into gba.json.
+ */
+async function applyAndSave(
   ctx: ExtensionCommandContext,
   deps: CommandDeps,
-  cfg: GbaConfig,
   key: keyof GbaConfig,
-  value: string,
+  patch: Partial<GbaConfig>,
+  display: string,
 ): Promise<void> {
-  // Normalize before save (clamp values)
-  const normalized = normalize(cfg);
-  Object.assign(cfg, normalized);
-  Object.assign(deps.cfg, normalized);
+  Object.assign(deps.cfg, normalize({ ...deps.cfg, ...patch }));
   try {
-    // Persist only the changed key merged over the file layer. The runtime
-    // cfg includes session-scoped env overrides (PI_GBA_AUTO_FOCUS,
-    // PI_GBA_AUDIO); dumping it wholesale would bake those into gba.json.
-    await saveConfigFile(normalize({ ...(await loadConfigFile()), [key]: normalized[key] }));
-    ctx.ui.notify(`GBA config saved: ${key} = ${value}`, "info");
+    await saveConfigFile(normalize({ ...(await loadConfigFile()), [key]: deps.cfg[key] }));
+    ctx.ui.notify(`GBA config saved: ${key} = ${display}`, "info");
   } catch (err: unknown) {
     ctx.ui.notify(
       `GBA config: write failed — setting applied for this session only (${String((err as Error).message ?? err)})`,
       "error",
     );
+  }
+}
+
+/** Reset config to defaults in place; shared by the menu and `/gba config reset`. */
+async function resetConfig(ctx: ExtensionCommandContext, deps: CommandDeps): Promise<void> {
+  const prevRomDir = deps.cfg.romDir;
+  await resetConfigFile();
+  const fresh = await resolveConfig();
+  Object.assign(deps.cfg, fresh);
+  ctx.ui.notify("GBA config reset to defaults", "info");
+  if (fresh.romDir !== prevRomDir) {
+    ctx.ui.notify("GBA config: romDir change requires restart to take effect", "info");
   }
 }
 
@@ -370,14 +446,7 @@ export function registerAll(pi: ExtensionAPI, deps: CommandDeps): void {
           ctx.ui.notify(MSG.audioUnmuted, "info");
         } else if (token === "config") {
           if (subToken === "reset") {
-            const prevRomDir = deps.cfg.romDir;
-            await resetConfigFile();
-            const fresh = await resolveConfig();
-            Object.assign(deps.cfg, fresh);
-            ctx.ui.notify("GBA config reset to defaults", "info");
-            if (fresh.romDir !== prevRomDir) {
-              ctx.ui.notify("GBA config: romDir change requires restart to take effect", "info");
-            }
+            await resetConfig(ctx, deps);
           } else {
             await handleConfig(ctx, deps);
           }
