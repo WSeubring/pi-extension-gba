@@ -35,17 +35,9 @@
 import { closeSync, existsSync, openSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import type { Component, TUI } from "@mariozechner/pi-tui";
-import {
-  allocateImageId,
-  calculateImageRows,
-  deleteKittyImage,
-  getCellDimensions,
-  isKeyRelease,
-  matchesKey,
-} from "@mariozechner/pi-tui";
+import { allocateImageId, calculateImageRows, deleteKittyImage, getCellDimensions } from "@mariozechner/pi-tui";
 import { renderTrace } from "./flags.js";
-import { HeldButtons } from "./held-buttons.js";
-import { classifyGbaKey } from "./input.js";
+import { GbaInputSession } from "./input.js";
 import type { ButtonSink } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -215,7 +207,7 @@ export class GbaGameComponent implements Component {
   /** Image id currently on screen (delete target for the next swap). */
   private visibleImageId: number | undefined;
 
-  private readonly buttons: HeldButtons;
+  private readonly input: GbaInputSession;
   private disposed = false;
 
   /** Trace counter (PI_GBA_RENDER_TRACE) — first few placements logged. */
@@ -235,8 +227,8 @@ export class GbaGameComponent implements Component {
     this.sink = _deps.sink;
     this.done = done;
     // Terminals don't reliably send key-up; the decay timer auto-releases a
-    // stuck button after PRESS_DECAY_MS (see HeldButtons).
-    this.buttons = new HeldButtons(this.sink, PRESS_DECAY_MS);
+    // stuck button after PRESS_DECAY_MS (see HeldButtons inside GbaInputSession).
+    this.input = new GbaInputSession(this.sink, PRESS_DECAY_MS);
     const dir = resolveRawDir();
     const makeSlot = (): DoubleBufferSlot => {
       const imageId = allocateImageId();
@@ -365,43 +357,8 @@ export class GbaGameComponent implements Component {
     if (RENDER_TRACE) {
       process.stderr.write(`[pi-gba-trace] handleInput ${JSON.stringify(data)}\n`);
     }
-    // Hardcoded exit hatches. Use matchesKey so every Kitty keyboard protocol
-    // enhancement level (legacy ESC, CSI-u baseline, event-encoded) is covered.
-    //
-    // Press only: matchesKey also matches the key-RELEASE encoding
-    // (\x1b[103;3:3u), and this component opts into release delivery
-    // (wantsKeyRelease). Without the guard, entering game mode via the alt+g
-    // shortcut self-closes instantly — the editor consumes the press, focus
-    // moves here, and our own trigger key's release fires the exit hatch
-    // (observed in Ghostty; tmux never delivers releases).
-    if (
-      data === "\x03" || // raw ctrl+c — always exits
-      data === "\x1b" || // raw escape — always exits
-      (!isKeyRelease(data) &&
-        (matchesKey(data, "alt+g") ||
-          matchesKey(data, "ctrl+c") ||
-          matchesKey(data, "escape") ||
-          matchesKey(data, "q") ||
-          matchesKey(data, "shift+q")))
-    ) {
+    if (this.input.handleKey(data) === "exit") {
       this.done(undefined);
-      return;
-    }
-
-    const event = classifyGbaKey(data);
-    switch (event.kind) {
-      case "press":
-        this.buttons.press(event.button);
-        break;
-      case "release":
-        this.buttons.release(event.button);
-        break;
-      case "repeat":
-        this.buttons.repeat(event.button);
-        break;
-      case "passthrough":
-      case "drop":
-        break;
     }
   }
 
@@ -419,7 +376,7 @@ export class GbaGameComponent implements Component {
     this.removeWriteHook();
 
     // Release all held buttons.
-    this.buttons.releaseAll();
+    this.input.releaseAll();
 
     // Delete both buffered Kitty images from the terminal, close fds,
     // unlink the raw files.

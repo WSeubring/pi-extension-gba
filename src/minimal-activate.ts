@@ -8,7 +8,6 @@
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Component, TUI } from "@mariozechner/pi-tui";
-import { isKeyRelease, matchesKey } from "@mariozechner/pi-tui";
 import type { GbaCapabilities } from "./capabilities.js";
 import { detectCapabilities } from "./capabilities.js";
 import { registerAll } from "./commands.js";
@@ -16,8 +15,7 @@ import type { GbaConfig } from "./config.js";
 import { resolveConfig } from "./config.js";
 import type { Emulator } from "./emulator.js";
 import { createEmulator } from "./emulator.js";
-import { HeldButtons } from "./held-buttons.js";
-import { classifyGbaKey } from "./input.js";
+import { GbaInputSession } from "./input.js";
 import type { Lifecycle } from "./lifecycle.js";
 import { NOOP_RENDER } from "./lifecycle.js";
 import { createUnsupportedNotifier } from "./messages.js";
@@ -54,7 +52,7 @@ const NOOP_LIFECYCLE: Lifecycle = {
  */
 export class InputOverlayComponent implements Component {
   readonly wantsKeyRelease = true;
-  private readonly buttons: HeldButtons;
+  private readonly input: GbaInputSession;
   private disposed = false;
 
   constructor(
@@ -62,7 +60,7 @@ export class InputOverlayComponent implements Component {
     private readonly done: () => void,
   ) {
     // No decay timer: this overlay gets reliable key-release events.
-    this.buttons = new HeldButtons(sink, 0);
+    this.input = new GbaInputSession(sink, 0);
   }
 
   render(_width: number): string[] {
@@ -72,45 +70,15 @@ export class InputOverlayComponent implements Component {
   invalidate(): void {}
 
   handleInput(data: string): void {
-    // N1: matchesKey handles raw \x03 (ctrl+c) and \x1b (escape) correctly
-    // (verified in node_modules/@mariozechner/pi-tui/dist/keys.js — the
-    // ctrl+c branch: rawCtrl("c") === "\x03" → data === rawCtrl check;
-    // the escape branch: data === "\x1b" check). Raw arms removed as redundant.
-    //
-    // Press only: this overlay opts into key releases (wantsKeyRelease) and
-    // matchesKey also matches release encodings — without the guard the
-    // alt+g release that follows the shortcut press closes the overlay
-    // immediately (see game-component.ts handleInput for the full story).
-    if (
-      !isKeyRelease(data) &&
-      (matchesKey(data, "alt+g") ||
-        matchesKey(data, "escape") ||
-        matchesKey(data, "ctrl+c") ||
-        matchesKey(data, "q") ||
-        matchesKey(data, "shift+q"))
-    ) {
+    if (this.input.handleKey(data) === "exit") {
       this.done();
-      return;
-    }
-    const event = classifyGbaKey(data);
-    switch (event.kind) {
-      case "press":
-        this.buttons.press(event.button);
-        break;
-      case "release":
-        this.buttons.release(event.button);
-        break;
-      case "repeat":
-      case "passthrough":
-      case "drop":
-        break;
     }
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.buttons.releaseAll();
+    this.input.releaseAll();
   }
 }
 
