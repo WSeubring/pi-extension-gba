@@ -786,6 +786,34 @@ test("detach cancels a pending auto-entry timer", async () => {
   }
 });
 
+test("detach awaits the in-flight game-mode unmount (shutdown race fix)", async () => {
+  const { render } = makeMockRender();
+  const ctrlAudio = makeControllableAudio();
+  const af = createAutoFocus(makeDeps({ render, audio: ctrlAudio.audio }, makeMockPi()));
+  af.attach();
+
+  // Enter game mode, then make the unmount's audio.stop() block so the
+  // requestClose → done → enter()-finally chain is still in flight.
+  const c = makeControllableCustom();
+  void af.enterManual(makeCtxWithControllableCustom(c));
+  await flushAsync();
+  assert.ok(af.isInGameMode(), "in game mode");
+
+  ctrlAudio.holdStop(true);
+  let detached = false;
+  const detachPromise = af.detach().then(() => {
+    detached = true;
+  });
+  c.resolve(); // custom() resolves → finally runs → parks on the held audio.stop
+  await flushAsync();
+  assert.equal(detached, false, "detach must not resolve while the unmount's audio.stop is pending");
+
+  ctrlAudio.holdStop(false);
+  ctrlAudio.resolveStop();
+  await detachPromise;
+  assert.ok(detached, "detach resolves only after the unmount completes");
+});
+
 // ---------------------------------------------------------------------------
 // Both auto-entry and manual entry resume a Paused lifecycle. The L3
 // still-frame contract lives inside lifecycle.resume() itself, which refuses

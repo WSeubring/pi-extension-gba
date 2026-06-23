@@ -160,9 +160,11 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
   });
 
   pi.on("session_shutdown", async () => {
-    // Stop dispatching agent events first, then run the shared core teardown.
+    // Stop dispatching agent events, then await any in-flight game-mode unmount
+    // BEFORE the core teardown so render.destroy() can't race the component's
+    // own useBackend/showStillFrame on its way out.
     coordinator.detach();
-    autoFocus.detach();
+    await autoFocus.detach();
     await teardownCore({
       persistence,
       emulator,

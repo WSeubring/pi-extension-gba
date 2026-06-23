@@ -41,8 +41,8 @@ export interface AutoFocusDeps {
 export interface AutoFocus {
   /** Register the alt+g shortcut and apply the widget tick policy. */
   attach(): void;
-  /** Unsubscribe, release any live custom UI. */
-  detach(): void;
+  /** Unsubscribe, release any live custom UI, and await its unmount. */
+  detach(): Promise<void>;
   /**
    * Agent turn started — arm the debounce timer to enter game mode. Invoked
    * by the session coordinator after lifecycle.onAgentStart(), so the tick
@@ -109,6 +109,21 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
 
   /** Monotonic session id source (see FocusState.gen). */
   let genCounter = 0;
+
+  /**
+   * The in-flight enter() promise (resolves when its finally — audio.stop +
+   * widget restore — completes). detach() awaits it so shutdown can't destroy
+   * the renderer mid-unmount (the requestClose → done → finally chain runs on a
+   * later tick). Cleared only by the session that set it.
+   */
+  let entering: Promise<void> | undefined;
+  const trackEnter = (p: Promise<void>): Promise<void> => {
+    entering = p;
+    void p.finally(() => {
+      if (entering === p) entering = undefined;
+    });
+    return p;
+  };
 
   const inGameMode = (): boolean => state.tag === "entering" || state.tag === "game";
 
@@ -281,7 +296,7 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
       });
     },
 
-    detach() {
+    async detach(): Promise<void> {
       if (!attached) return;
       // Cancel any pending timer.
       if (pendingEnterTimer !== undefined) {
@@ -293,6 +308,10 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
         exit();
       }
       attached = false;
+      // Wait for any in-flight enter() to finish unmounting (its finally runs
+      // audio.stop + restores the widget backend on a later tick). Without this
+      // a shutdown could destroy the renderer mid-unmount — a write-after-free.
+      await entering;
     },
 
     onAgentStart(ctx: ExtensionContext): void {
@@ -313,7 +332,7 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
       }
       pendingEnterTimer = setTimeout(() => {
         pendingEnterTimer = undefined;
-        void enter(ctx, { resume: true });
+        void trackEnter(enter(ctx, { resume: true }));
       }, cfg.autoFocusDebounceMs);
     },
 
@@ -347,7 +366,7 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
       // intent of the L3 still-frame rule. The `manual` flag records on the
       // session that agent_end must not auto-exit it; it clears with the state
       // when the session ends, so no manual reset is needed.
-      await enter(ctx, { resume: true, manual: true });
+      await trackEnter(enter(ctx, { resume: true, manual: true }));
     },
 
     exitManual(): void {

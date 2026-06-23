@@ -59,7 +59,7 @@ function makeLifecycle(log: string[]): Lifecycle {
 function makeAutoFocus(log: string[]): AutoFocus {
   return {
     attach() {},
-    detach() {},
+    async detach() {},
     onAgentStart() {
       log.push("autoFocus.onAgentStart");
     },
