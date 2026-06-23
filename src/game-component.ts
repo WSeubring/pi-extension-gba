@@ -33,11 +33,11 @@
  */
 
 import { closeSync, existsSync, openSync, unlinkSync, writeSync } from "node:fs";
-import { join } from "node:path";
 import type { Component, TUI } from "@mariozechner/pi-tui";
-import { allocateImageId, calculateImageRows, deleteKittyImage, getCellDimensions } from "@mariozechner/pi-tui";
+import { allocateImageId, deleteKittyImage } from "@mariozechner/pi-tui";
 import { renderTrace } from "./flags.js";
 import { GbaInputSession } from "./input.js";
+import { computeLayout, encodeKittyRawFile, FOOTER_ROWS, rawFilePath, resolveRawDir } from "./kitty.js";
 import type { ButtonSink } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -57,87 +57,8 @@ export interface GameComponentDeps {
 
 const PRESS_DECAY_MS = 100;
 
-/**
- * Rows reserved below the image for chrome that shares the screen with the
- * component: our own footer line (1) plus pi's status bar rows (2), so the
- * image never overlaps pi's bottom chrome.
- */
-const FOOTER_ROWS = 3;
-
-/** Height ratio: cap image rows to 90 % of available terminal height. */
-const HEIGHT_RATIO = 0.9;
-
 /** PI_GBA_RENDER_TRACE=1 → stderr-log placement pins + input bytes. */
 const RENDER_TRACE = renderTrace();
-
-// ---------------------------------------------------------------------------
-// Raw-file path resolution
-// ---------------------------------------------------------------------------
-
-function resolveRawDir(): string {
-  const candidates = [process.env.TMPDIR, "/dev/shm", "/tmp"].filter(
-    (v): v is string => typeof v === "string" && v.length > 0,
-  );
-  for (const candidate of candidates) {
-    try {
-      if (existsSync(candidate)) return candidate;
-    } catch {
-      // keep trying
-    }
-  }
-  return "/tmp";
-}
-
-function rawFilePath(dir: string, imageId: number): string {
-  return join(dir, `pi-gba-${imageId}.raw`);
-}
-
-// ---------------------------------------------------------------------------
-// Kitty t=f (file transport) sequence — adapted from pi-nes prior art.
-// ---------------------------------------------------------------------------
-
-interface KittySeqOptions {
-  widthPx: number;
-  heightPx: number;
-  columns: number;
-  rows: number;
-  imageId: number;
-}
-
-function encodeKittyRawFile(base64Path: string, opts: KittySeqOptions): string {
-  // f=32 RGBA — upscaler forces alpha=0xFF (render.ts makeUpscaler), probe
-  // confirms Ghostty renders RGBA correctly when alpha is opaque.
-  //
-  // No `S=` (data size): Ghostty 1.3.1 rejects any t=f transmit carrying S
-  // with "EINVAL: invalid data" and renders nothing (verified by param-
-  // isolation probe 2026-06-09 — identical sequence without S gets ;OK and
-  // paints). S is optional in the kitty spec; omitting it reads the whole
-  // file, which is exactly one frame.
-  const params = [
-    "a=T",
-    "f=32",
-    "t=f",
-    "p=1",
-    "q=2",
-    `s=${opts.widthPx}`,
-    `v=${opts.heightPx}`,
-    `c=${opts.columns}`,
-    `r=${opts.rows}`,
-    `i=${opts.imageId}`,
-    "z=0",
-  ];
-  return `\x1b_G${params.join(",")};${base64Path}\x1b\\`;
-}
-
-// ---------------------------------------------------------------------------
-// Layout computation
-// ---------------------------------------------------------------------------
-
-interface KittyLayout {
-  cols: number;
-  rows: number;
-  availableRows: number;
-}
 
 /** One half of the double-buffer: a Kitty image id backed by a raw RGBA file. */
 interface DoubleBufferSlot {
@@ -145,30 +66,6 @@ interface DoubleBufferSlot {
   path: string;
   path64: string;
   fd: number | null;
-}
-
-function computeLayout(widthCols: number, terminalRows: number, widthPx: number, heightPx: number): KittyLayout {
-  const availableRows = Math.max(1, terminalRows - FOOTER_ROWS);
-  const maxRows = Math.max(1, Math.floor(availableRows * HEIGHT_RATIO));
-
-  // Use pi-tui's calculateImageRows which reads the runtime cell dimensions
-  // reported by the terminal (TIOCGWINSZ pixel extents). Falls back to the
-  // 0.5 approximation if the helper returns zero (e.g. in headless test envs).
-  const cellDims = getCellDimensions();
-  let aspectRatioRows = calculateImageRows({ widthPx, heightPx }, widthCols, cellDims);
-  if (!aspectRatioRows) {
-    aspectRatioRows = Math.ceil((heightPx / widthPx) * widthCols * 0.5);
-  }
-  // Kitty's c=/r= scale the image to fill the cell rect WITHOUT preserving
-  // aspect ratio. When the height cap binds (wide/short terminals), shrink
-  // the columns proportionally so the frame is not stretched horizontally.
-  let cols = widthCols;
-  if (aspectRatioRows > maxRows) {
-    cols = Math.max(1, Math.floor((widthCols * maxRows) / aspectRatioRows));
-  }
-  const rows = Math.min(aspectRatioRows, maxRows);
-
-  return { cols, rows: Math.max(1, rows), availableRows };
 }
 
 // ---------------------------------------------------------------------------
