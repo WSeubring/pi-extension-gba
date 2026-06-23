@@ -1,18 +1,16 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Emulator } from "./emulator.js";
+import type { RenderControllerWithSwap } from "./render.js";
 import { GBA_BUTTONS } from "./types.js";
 
-// Minimal interface lifecycle consumes from Phase 2's RenderController.
-// Phase 2's RenderController is a superset; this interface is the contract.
-export interface RenderController {
-  start(): void;
-  stop(): void;
-  shrink(): void;
-  expand(): void;
-  hide(): void;
+// The narrow slice of the renderer that lifecycle drives. Derived from the
+// canonical RenderControllerWithSwap (render.ts) via Pick so a rename there is a
+// compile error here rather than silent structural drift; showStillFrame stays
+// optional because NOOP_RENDER and minimal stubs omit it.
+export type RenderController = Pick<RenderControllerWithSwap, "start" | "stop" | "shrink" | "expand" | "hide"> & {
   /** Phase 9 REVISE B3: optional still-frame flush on Running→Paused. */
   showStillFrame?(): void;
-}
+};
 
 /**
  * No-op render controller used before a renderer exists (no ROM loaded) or when
