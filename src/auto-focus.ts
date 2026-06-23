@@ -72,42 +72,45 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
     return deps.audio;
   }
 
-  /** Whether the custom UI is currently live. */
-  let mode: "chat" | "game" = "chat";
-
   /**
-   * Set by alt+g while in chat during an agent turn → stays in game across
-   * agent_end (no auto-exit). Cleared when user presses alt+g again to exit.
+   * Game-mode state machine. The illegal combinations the old flag soup could
+   * represent (a live component while in chat, a close request with no session)
+   * are now unrepresentable.
+   *
+   *   chat     → not in game mode.
+   *   entering → enter() has flipped on but the component isn't mounted yet
+   *              (awaiting audio.start + the ctx.ui.custom factory). exit()
+   *              during this window can only record `closeRequested`, replayed
+   *              at mount.
+   *   game     → component mounted and live; exit() calls requestClose().
+   *
+   * `gen` is a per-session id: enter()'s teardown runs after an await
+   * (audio.stop can take 200 ms+), and a NEWER enter() may have started and now
+   * own the backend — only the latest session may restore the widget backend.
+   * `manualEntered` (alt+g during chat) suppresses agent_end auto-exit for this
+   * session; it lives in the state because it's a property of the session.
    */
-  let manualEnteredDuringChat = false;
+  type FocusState =
+    | { tag: "chat" }
+    | { tag: "entering"; gen: number; manualEntered: boolean; closeRequested: boolean }
+    | { tag: "game"; gen: number; manualEntered: boolean; component: GbaGameComponent };
+
+  let state: FocusState = { tag: "chat" };
 
   /**
-   * Set when the user presses alt+g while in game mode mid-agent → block
-   * the CURRENT and NEXT auto-entry. Cleared on the agent_end following the
-   * exit (so the next agent_start can auto-enter again).
+   * Set when the user presses alt+g while in game mode mid-agent → block the
+   * CURRENT and NEXT auto-entry. Spans turns (outlives a single session), so it
+   * lives outside FocusState. Cleared on the agent_end following the exit.
    */
   let manualExitedDuringGame = false;
 
   /** Pending debounce timer — cancel on agent_end to absorb fast replies. */
   let pendingEnterTimer: ReturnType<typeof setTimeout> | undefined;
 
-  /** Live component ref — needed to call requestClose() from auto-exit. */
-  let liveComponent: GbaGameComponent | undefined;
+  /** Monotonic session id source (see FocusState.gen). */
+  let genCounter = 0;
 
-  /**
-   * Set when exit() fires in the window between `mode = "game"` and the
-   * component mount (audio.start await + factory): liveComponent is still
-   * undefined then, so the close must be replayed right after the mount.
-   */
-  let closeRequested = false;
-
-  /**
-   * Generation counter for enter() sessions. The finally block runs after
-   * an await (audio.stop can take 200 ms+); a NEW enter() started during
-   * that await owns the backend, so a stale finally must not restore
-   * "widget" out from under it.
-   */
-  let enterGen = 0;
+  const inGameMode = (): boolean => state.tag === "entering" || state.tag === "game";
 
   /** Whether attach() has been called. */
   let attached = false;
@@ -116,17 +119,16 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
   // Core enter / exit helpers
   // ---------------------------------------------------------------------------
 
-  async function enter(ctx: ExtensionContext, opts?: { resume?: boolean }): Promise<void> {
+  async function enter(ctx: ExtensionContext, opts?: { resume?: boolean; manual?: boolean }): Promise<void> {
     const render = deps.render;
     if (!render) {
       log("[pi-extension-gba] auto-focus enter: no render controller (no ROM loaded)");
       return;
     }
-    if (mode === "game") return;
+    if (state.tag !== "chat") return;
 
-    const myGen = ++enterGen;
-    mode = "game";
-    closeRequested = false;
+    const gen = ++genCounter;
+    state = { tag: "entering", gen, manualEntered: opts?.manual ?? false, closeRequested: false };
     log("[pi-extension-gba] auto-focus → GameMode");
 
     // Start audio before entering game mode. Failures are logged but must
@@ -144,28 +146,33 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
           { emulator: emulator as unknown, sink: emulator, scale: cfg.scale },
           done,
         );
-        liveComponent = component;
 
-        // Wire component into the custom backend, THEN swap the backend so
-        // the tick loop immediately routes frames to the new component.
-        render.setCustomComponent(component);
-        render.useBackend("custom");
+        // Only mount if THIS session is still the one entering. exit() may
+        // have set closeRequested while we awaited audio.start.
+        if (state.tag === "entering" && state.gen === gen) {
+          const replayClose = state.closeRequested;
+          state = { tag: "game", gen, manualEntered: state.manualEntered, component };
 
-        // Auto-entry must show a RUNNING game. With autoRunOnAgentStart=false
-        // the lifecycle pauses the tick loop on agent_end and nothing restarts
-        // it on the next auto-entry — game mode then mounts a frozen frame
-        // with a silent (but spawned) audio subprocess. resume() is a no-op
-        // when already Running, crashed, or manually paused (L3 still-frame).
-        if (opts?.resume) {
-          lifecycle.resume?.();
-        }
+          // Wire component into the custom backend, THEN swap the backend so
+          // the tick loop immediately routes frames to the new component.
+          render.setCustomComponent(component);
+          render.useBackend("custom");
 
-        // exit() fired while we were still mounting (agent_end during the
-        // audio.start await) — replay the close now that the component can
-        // actually honour it, so game mode doesn't outlive the agent turn.
-        if (closeRequested) {
-          closeRequested = false;
-          component.requestClose();
+          // Auto-entry must show a RUNNING game. With autoRunOnAgentStart=false
+          // the lifecycle pauses the tick loop on agent_end and nothing restarts
+          // it on the next auto-entry — game mode then mounts a frozen frame
+          // with a silent (but spawned) audio subprocess. resume() is a no-op
+          // when already Running, crashed, or manually paused (L3 still-frame).
+          if (opts?.resume) {
+            lifecycle.resume?.();
+          }
+
+          // exit() fired while we were still mounting (agent_end during the
+          // audio.start await) — replay the close now that the component can
+          // actually honour it, so game mode doesn't outlive the agent turn.
+          if (replayClose) {
+            component.requestClose();
+          }
         }
 
         return component;
@@ -177,9 +184,9 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
       log(`[pi-extension-gba] game mode UI failed: ${String((err as Error)?.message ?? err)}`);
     } finally {
       // custom() resolved — either done() was called or the UI was dismissed.
-      liveComponent = undefined;
-      mode = "chat";
-      closeRequested = false;
+      // Flip to chat BEFORE the audio.stop await so a new enter() during that
+      // await passes the `state.tag === "chat"` guard and can own the backend.
+      state = { tag: "chat" };
 
       // Stop audio on GameMode exit. Failures are logged but must not block
       // cleanup (L9/L10).
@@ -189,10 +196,9 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
         log(`[pi-extension-gba] audio.stop() failed: ${String((err as Error)?.message ?? err)}`);
       }
 
-      // A new enter() may have started during the audio.stop await above —
-      // it passed the mode guard (mode was already "chat") and now owns the
-      // backend. Only the current generation may restore "widget".
-      if (enterGen === myGen) {
+      // A new enter() may have started during the audio.stop await above and
+      // now owns the backend. Only the latest session may restore "widget".
+      if (genCounter === gen) {
         // Restore the widget render backend so lifecycle's tick loop works.
         const currentRender = deps.render;
         if (currentRender && currentRender.activeBackend() === "custom") {
@@ -212,15 +218,14 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
   }
 
   function exit(): void {
-    if (mode !== "game") return;
-    if (liveComponent) {
-      liveComponent.requestClose();
-      // liveComponent and mode are cleared in the enter() finally block.
-    } else {
-      // enter() set mode="game" but has not mounted the component yet
-      // (still awaiting audio.start / the factory). Record the close so the
-      // mount replays it instead of leaving game mode up after agent_end.
-      closeRequested = true;
+    if (state.tag === "game") {
+      state.component.requestClose();
+      // The component → done() → enter()'s finally returns us to chat.
+    } else if (state.tag === "entering") {
+      // Component not mounted yet (still awaiting audio.start / the factory).
+      // Record the close so the mount replays it instead of leaving game mode
+      // up after agent_end.
+      state.closeRequested = true;
     }
   }
 
@@ -271,7 +276,7 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
           // Phase 9 REVISE B2: L3 permits manual entry while Paused — the
           // component renders the last-captured still-frame until the user
           // manually resumes (alt+shift+g) or agent_start re-fires.
-          if (mode === "game") {
+          if (inGameMode()) {
             autoFocus.exitManual();
             return;
           }
@@ -288,7 +293,7 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
         pendingEnterTimer = undefined;
       }
       // If in game mode, close the component.
-      if (mode === "game") {
+      if (inGameMode()) {
         exit();
       }
       attached = false;
@@ -302,7 +307,7 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
       // pick up the "no ambient widget" policy before the first Running tick.
       applyWidgetLiveTickPolicy();
       if (manualExitedDuringGame) return; // user exited mid-agent; suppress
-      if (mode === "game") return; // already in game mode
+      if (state.tag !== "chat") return; // already entering / in game mode
 
       // Defensive — clear any previously armed timer so back-to-back
       // agent_start events (theoretical race) never leave two concurrent
@@ -325,7 +330,9 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
         return;
       }
 
-      if (mode === "game" && !manualEnteredDuringChat) {
+      // Auto-exit unless this session was manually entered (alt+g during chat),
+      // which stays in game across agent_end.
+      if ((state.tag === "entering" || state.tag === "game") && !state.manualEntered) {
         exit();
       }
 
@@ -335,42 +342,29 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
     },
 
     async enterManual(ctx: ExtensionContext): Promise<void> {
-      if (mode === "game") return;
-      manualEnteredDuringChat = true;
-      try {
-        // resume: a game paused by agent_end auto-pause must tick again when
-        // the user deliberately opens game mode — otherwise (with
-        // autoRunOnAgentStart=false) alt+g lands on a frozen frame that
-        // ignores input. lifecycle.resume() still refuses when the user
-        // explicitly paused via alt+shift+g (manualOverride) or after a crash,
-        // which is the actual intent of the L3 still-frame rule.
-        await enter(ctx, { resume: true });
-      } finally {
-        // enter() resolves when the component calls done() — that means the
-        // user exited manually (alt+g/ctrl+c from inside game mode). Clear
-        // the flag even on failure: a stuck true would exempt every future
-        // auto-entered session from auto-exit.
-        manualEnteredDuringChat = false;
-      }
+      if (state.tag !== "chat") return;
+      // resume: a game paused by agent_end auto-pause must tick again when the
+      // user deliberately opens game mode — otherwise (with
+      // autoRunOnAgentStart=false) alt+g lands on a frozen frame that ignores
+      // input. lifecycle.resume() still refuses when the user explicitly paused
+      // via alt+shift+g (manualOverride) or after a crash, which is the actual
+      // intent of the L3 still-frame rule. The `manual` flag records on the
+      // session that agent_end must not auto-exit it; it clears with the state
+      // when the session ends, so no manual reset is needed.
+      await enter(ctx, { resume: true, manual: true });
     },
 
     exitManual(): void {
-      if (mode !== "game") return;
-      // Mark that the user manually exited while the agent may still be running.
-      // This suppresses the NEXT auto-entry (cleared on next agent_end).
-      if (!lifecycle.isRunning()) {
-        // Not mid-agent — no need to suppress future entries.
-        manualExitedDuringGame = false;
-      } else {
-        manualExitedDuringGame = true;
-      }
-      // Clear manualEnteredDuringChat so agent_end can auto-exit next time.
-      manualEnteredDuringChat = false;
+      if (!inGameMode()) return;
+      // Mark that the user manually exited while the agent may still be running,
+      // to suppress the NEXT auto-entry (cleared on next agent_end). Not
+      // mid-agent → nothing to suppress.
+      manualExitedDuringGame = lifecycle.isRunning();
       exit();
     },
 
     isInGameMode(): boolean {
-      return mode === "game";
+      return inGameMode();
     },
   };
 
