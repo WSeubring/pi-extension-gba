@@ -29,5 +29,14 @@ jobs:
 
       # OIDC trusted publishing needs npm >= 11.5.1; Node 22 ships 10.x. Use npx
       # to avoid the `npm i -g npm@latest` bootstrap bug on Node 22. `prepare`
-      # runs the tsc build; --provenance attests the build to the registry.
-      - run: npx -y npm@latest publish --access public --provenance
+      # runs the tsc build; provenance is attested by default under OIDC.
+      # Skip if this version is already on the registry so re-tags don't fail.
+      - name: Publish to npm (skip if version exists)
+        run: |
+          name=$(node -p "require('./package.json').name")
+          ver=$(node -p "require('./package.json').version")
+          if npm view "$name@$ver" version >/dev/null 2>&1; then
+            echo "$name@$ver already published — skipping."
+          else
+            npx -y npm@latest publish --access public --provenance
+          fi
