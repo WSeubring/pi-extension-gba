@@ -1,10 +1,17 @@
 {
   "name": "pi-extension-gba",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "GBA emulator as a pi extension. Play Pokémon while the agent works.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "author": "WSeubring",
+  "pi": {
+    "extensions": ["./dist/index.js"]
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "dist",
     "vendor/mgba-wasm/dist/mgba.js",
