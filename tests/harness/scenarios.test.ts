@@ -25,6 +25,7 @@ import { GbaGameComponent } from "../../src/game-component.js";
 import type { Lifecycle, RenderController } from "../../src/lifecycle.js";
 import type { Persistence } from "../../src/persistence.js";
 import type { RenderControllerWithSwap } from "../../src/render.js";
+import { createSessionCoordinator } from "../../src/session-coordinator.js";
 import type { ButtonSink } from "../../src/types.js";
 import { createMockCtx } from "./mock-ctx.js";
 import { createMockPi } from "./mock-pi.js";
@@ -169,6 +170,12 @@ function makeMockLifecycle(opts: { isRunning?: boolean } = {}) {
     },
     detach() {
       calls.push("detach");
+    },
+    onAgentStart() {
+      calls.push("onAgentStart");
+    },
+    async onAgentEnd() {
+      calls.push("onAgentEnd");
     },
     manualPauseToggle() {
       calls.push("manualPauseToggle");
@@ -431,6 +438,7 @@ test("scenario 2: agent_start → game mode → agent_end → auto-exit", async 
     audio: audio as unknown as AudioPlayer,
   });
   autoFocus.attach();
+  createSessionCoordinator(mockPi.pi, { lifecycle: lifecycle as unknown as Lifecycle, autoFocus }).attach();
 
   // Emit agent_start — game mode entry debounces with 0ms.
   await mockPi.emit("agent_start", { type: "agent_start" }, mockCtx.ctx);
@@ -620,6 +628,7 @@ test("scenario 5: PI_GBA_AUTO_FOCUS=0 → agent_start skips auto-enter; alt+g st
       audio: undefined,
     });
     autoFocus.attach();
+    createSessionCoordinator(mockPi.pi, { lifecycle: lifecycle as unknown as Lifecycle, autoFocus }).attach();
 
     // agent_start should NOT trigger game mode.
     await mockPi.emit("agent_start", { type: "agent_start" }, mockCtx.ctx);
@@ -777,6 +786,7 @@ test("scenario 7 (direct-pin): render is static scaffolding; no Kitty bytes in d
     audio: audio as unknown as AudioPlayer,
   });
   autoFocus.attach();
+  createSessionCoordinator(mockPi.pi, { lifecycle: lifecycle as unknown as Lifecycle, autoFocus }).attach();
 
   await mockPi.emit("agent_start", { type: "agent_start" }, mockCtx.ctx);
   await flushAsync(10);

@@ -39,10 +39,18 @@ export interface AutoFocusDeps {
 }
 
 export interface AutoFocus {
-  /** Subscribe to pi events, register alt+g shortcut. */
+  /** Register the alt+g shortcut and apply the widget tick policy. */
   attach(): void;
   /** Unsubscribe, release any live custom UI. */
   detach(): void;
+  /**
+   * Agent turn started — arm the debounce timer to enter game mode. Invoked
+   * by the session coordinator after lifecycle.onAgentStart(), so the tick
+   * loop is already resumed before game mode mounts.
+   */
+  onAgentStart(ctx: ExtensionContext): void;
+  /** Agent turn ended — cancel a pending entry or auto-exit game mode. */
+  onAgentEnd(): void;
   /** Called when alt+g is pressed in chat mode — enter game mode. */
   enterManual(ctx: ExtensionContext): Promise<void>;
   /** Called when alt+g is pressed in game mode — exit game mode. */
@@ -247,56 +255,6 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
 
       applyWidgetLiveTickPolicy();
 
-      // ---- agent_start handler ----
-      pi.on("agent_start", async (_event, ctx) => {
-        // Cache the ctx so exitManual can use it.
-        // (Design says "cache most recent ctx" — we do it on every event.)
-
-        // pi.on offers no unsubscribe — after detach() this handler stays
-        // registered and must self-disarm (a detach→attach cycle would
-        // otherwise also run doubled handlers).
-        if (!attached) return;
-        if (!cfg.autoFocusOnAgentStart) return;
-        if (!deps.render) return; // no ROM loaded yet
-        if (!caps.kittyGraphics) return;
-        // Re-apply on every agent_start so lazily-constructed renderers
-        // pick up the "no ambient widget" policy before the first Running tick.
-        applyWidgetLiveTickPolicy();
-        if (manualExitedDuringGame) return; // user exited mid-agent; suppress
-        if (mode === "game") return; // already in game mode
-
-        // Phase 9 REVISE B3: defensive — clear any previously armed timer so
-        // back-to-back agent_start events (theoretical race) never leave two
-        // concurrent debounce timers live.
-        if (pendingEnterTimer !== undefined) {
-          clearTimeout(pendingEnterTimer);
-        }
-        pendingEnterTimer = setTimeout(() => {
-          pendingEnterTimer = undefined;
-          void enter(ctx, { resume: true });
-        }, cfg.autoFocusDebounceMs);
-      });
-
-      // ---- agent_end handler ----
-      pi.on("agent_end", async (_event, _ctx) => {
-        if (!attached) return;
-        if (pendingEnterTimer !== undefined) {
-          // Fast reply — cancel before entering; arm for next turn.
-          clearTimeout(pendingEnterTimer);
-          pendingEnterTimer = undefined;
-          manualExitedDuringGame = false; // reset so next agent_start auto-enters
-          return;
-        }
-
-        if (mode === "game" && !manualEnteredDuringChat) {
-          exit();
-        }
-
-        // Clear manualExitedDuringGame after the turn completes so the
-        // following agent_start can auto-enter again.
-        manualExitedDuringGame = false;
-      });
-
       // ---- alt+g shortcut ----
       pi.registerShortcut("alt+g", {
         description: "Toggle GBA game mode",
@@ -334,6 +292,46 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
         exit();
       }
       attached = false;
+    },
+
+    onAgentStart(ctx: ExtensionContext): void {
+      if (!cfg.autoFocusOnAgentStart) return;
+      if (!deps.render) return; // no ROM loaded yet
+      if (!caps.kittyGraphics) return;
+      // Re-apply on every agent_start so lazily-constructed renderers
+      // pick up the "no ambient widget" policy before the first Running tick.
+      applyWidgetLiveTickPolicy();
+      if (manualExitedDuringGame) return; // user exited mid-agent; suppress
+      if (mode === "game") return; // already in game mode
+
+      // Defensive — clear any previously armed timer so back-to-back
+      // agent_start events (theoretical race) never leave two concurrent
+      // debounce timers live.
+      if (pendingEnterTimer !== undefined) {
+        clearTimeout(pendingEnterTimer);
+      }
+      pendingEnterTimer = setTimeout(() => {
+        pendingEnterTimer = undefined;
+        void enter(ctx, { resume: true });
+      }, cfg.autoFocusDebounceMs);
+    },
+
+    onAgentEnd(): void {
+      if (pendingEnterTimer !== undefined) {
+        // Fast reply — cancel before entering; arm for next turn.
+        clearTimeout(pendingEnterTimer);
+        pendingEnterTimer = undefined;
+        manualExitedDuringGame = false; // reset so next agent_start auto-enters
+        return;
+      }
+
+      if (mode === "game" && !manualEnteredDuringChat) {
+        exit();
+      }
+
+      // Clear manualExitedDuringGame after the turn completes so the
+      // following agent_start can auto-enter again.
+      manualExitedDuringGame = false;
     },
 
     async enterManual(ctx: ExtensionContext): Promise<void> {

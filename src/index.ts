@@ -13,6 +13,7 @@ import activateMinimal from "./minimal-activate.js";
 import { createPersistence } from "./persistence.js";
 import type { RenderController as PhaseRenderController, RenderControllerWithSwap } from "./render.js";
 import { createRenderer } from "./render.js";
+import { createSessionCoordinator } from "./session-coordinator.js";
 
 // ctx resolution: renderer construction requires an ExtensionCommandContext (for
 // ctx.ui.setWidget), which is only available per-call. We defer renderer
@@ -129,6 +130,11 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
   });
   autoFocus.attach();
 
+  // One owner of agent_start/agent_end, dispatching lifecycle → auto-focus in
+  // a fixed order (was two independent subscriptions with implicit ordering).
+  const coordinator = createSessionCoordinator(pi, { lifecycle, autoFocus });
+  coordinator.attach();
+
   registerAll(pi, {
     emulator,
     persistence,
@@ -165,6 +171,7 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
     } catch (err) {
       console.warn(`[pi-extension-gba] session_shutdown snapshot failed: ${String((err as Error)?.message ?? err)}`);
     }
+    coordinator.detach();
     autoFocus.detach();
     await persistence.flushPending();
     persistence.destroy();

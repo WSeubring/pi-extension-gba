@@ -24,6 +24,15 @@ export interface LifecycleOptions {
 export interface Lifecycle {
   attach(): void;
   detach(): void;
+  /**
+   * Agent turn started. Resumes the tick loop (Paused → Running) when
+   * auto-run is on and the user hasn't manually paused. Invoked by the
+   * session coordinator, which owns the single agent_start subscription and
+   * fixes the lifecycle-then-auto-focus call order.
+   */
+  onAgentStart(): void;
+  /** Agent turn ended. Pauses the tick loop (Running → Paused) + snapshots. */
+  onAgentEnd(): Promise<void>;
   manualPauseToggle(): void;
   isRunning(): boolean;
   onRomLoad(): void;
@@ -125,34 +134,6 @@ export function createLifecycle(
       if (attached) return;
       attached = true;
 
-      pi.on("agent_start", async (_event, ctx) => {
-        try {
-          // pi.on offers no unsubscribe — after detach() this handler stays
-          // registered, so it must self-disarm (and a detach→attach cycle
-          // would otherwise run doubled handlers).
-          if (!attached) return;
-          if (state !== "Paused") return;
-          if (!opts.autoRunOnAgentStart) return;
-          if (manualOverride) return;
-          goRunning();
-        } catch (err) {
-          ctx.ui.notify(`GBA lifecycle error: ${String((err as Error).message ?? err)}`, "error");
-          log(`[pi-extension-gba] agent_start handler threw: ${String(err)}`);
-        }
-      });
-
-      pi.on("agent_end", async (_event, ctx) => {
-        try {
-          if (!attached) return;
-          if (state !== "Running") return;
-          if (manualOverride) return;
-          await goPaused();
-        } catch (err) {
-          ctx.ui.notify(`GBA lifecycle error: ${String((err as Error).message ?? err)}`, "error");
-          log(`[pi-extension-gba] agent_end handler threw: ${String(err)}`);
-        }
-      });
-
       pi.registerShortcut("alt+shift+g", {
         description: "Toggle GBA pause/resume manually",
         handler: (ctx: ExtensionContext) => {
@@ -188,6 +169,19 @@ export function createLifecycle(
       attached = false;
       manualOverride = false;
       log("[pi-extension-gba] state → Idle (detached)");
+    },
+
+    onAgentStart() {
+      if (state !== "Paused") return;
+      if (!opts.autoRunOnAgentStart) return;
+      if (manualOverride) return;
+      goRunning();
+    },
+
+    async onAgentEnd() {
+      if (state !== "Running") return;
+      if (manualOverride) return;
+      await goPaused();
     },
 
     manualPauseToggle() {

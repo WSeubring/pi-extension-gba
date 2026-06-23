@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { AgentEndEvent, AgentStartEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { Emulator } from "../src/emulator.js";
 import type { LifecycleOptions, RenderController } from "../src/lifecycle.js";
 import { createLifecycle } from "../src/lifecycle.js";
@@ -57,34 +57,15 @@ function makeMockEmulator(): {
   };
 }
 
-type EventName = "agent_start" | "agent_end";
-type HandlerFn = (event: AgentStartEvent | AgentEndEvent, ctx: ExtensionContext) => Promise<void> | void;
-
-function makeMockPi(): { pi: ExtensionAPI; fire(event: EventName): Promise<void> } {
-  const handlers: Map<EventName, HandlerFn> = new Map();
+// Lifecycle's agent_start/agent_end logic is driven by calling its
+// onAgentStart/onAgentEnd methods directly (the session coordinator invokes
+// them in production). The mock pi only needs no-op registration stubs.
+function makeMockPi(): { pi: ExtensionAPI } {
   const pi = {
-    on(event: string, handler: HandlerFn) {
-      handlers.set(event as EventName, handler);
-    },
-    registerShortcut(_shortcut: string, _opts: unknown) {},
+    on() {},
+    registerShortcut() {},
   } as unknown as ExtensionAPI;
-
-  const mockCtx = {
-    ui: {
-      notify() {},
-    },
-  } as unknown as ExtensionContext;
-
-  return {
-    pi,
-    async fire(event: EventName) {
-      const h = handlers.get(event);
-      if (h) {
-        const ev = { type: event } as AgentStartEvent | AgentEndEvent;
-        await h(ev, mockCtx);
-      }
-    },
-  };
+  return { pi };
 }
 
 function makeOpts(overrides?: Partial<LifecycleOptions>): LifecycleOptions {
@@ -100,7 +81,7 @@ function makeOpts(overrides?: Partial<LifecycleOptions>): LifecycleOptions {
 // ---- tests ----
 
 test("happy path: onRomLoad starts render; agent_end pauses; agent_start resumes", async () => {
-  const { pi, fire } = makeMockPi();
+  const { pi } = makeMockPi();
   const { emulator } = makeMockEmulator();
   const { render, calls } = makeMockRender();
   const opts = makeOpts();
@@ -111,15 +92,15 @@ test("happy path: onRomLoad starts render; agent_end pauses; agent_start resumes
   lifecycle.onRomLoad();
   assert.deepEqual(calls, ["start", "expand"], "onRomLoad → start + expand");
 
-  await fire("agent_end");
+  await lifecycle.onAgentEnd();
   assert.deepEqual(calls, ["start", "expand", "stop", "shrink"], "agent_end → stop + shrink");
 
-  await fire("agent_start");
+  await lifecycle.onAgentStart();
   assert.deepEqual(calls, ["start", "expand", "stop", "shrink", "start", "expand"], "agent_start → start + expand");
 });
 
 test("manual override sticks: manualPauseToggle blocks agent_start", async () => {
-  const { pi, fire } = makeMockPi();
+  const { pi } = makeMockPi();
   const { emulator } = makeMockEmulator();
   const { render, calls } = makeMockRender();
   const opts = makeOpts();
@@ -135,7 +116,7 @@ test("manual override sticks: manualPauseToggle blocks agent_start", async () =>
   assert.deepEqual(calls, ["start", "expand", "stop", "shrink"]);
 
   // agent_start should be a no-op because manualOverride = true
-  await fire("agent_start");
+  await lifecycle.onAgentStart();
   assert.deepEqual(calls, ["start", "expand", "stop", "shrink"], "agent_start is no-op after manual override");
 
   // Manual resume — override still true
@@ -143,7 +124,7 @@ test("manual override sticks: manualPauseToggle blocks agent_start", async () =>
   assert.deepEqual(calls, ["start", "expand", "stop", "shrink", "start", "expand"]);
 
   // agent_end should be a no-op because manualOverride = true
-  await fire("agent_end");
+  await lifecycle.onAgentEnd();
   assert.deepEqual(
     calls,
     ["start", "expand", "stop", "shrink", "start", "expand"],
@@ -152,7 +133,7 @@ test("manual override sticks: manualPauseToggle blocks agent_start", async () =>
 });
 
 test("autorun gating: autoRunOnAgentStart=false blocks agent_start transition", async () => {
-  const { pi, fire } = makeMockPi();
+  const { pi } = makeMockPi();
   const { emulator } = makeMockEmulator();
   const { render, calls } = makeMockRender();
   const opts = makeOpts({ autoRunOnAgentStart: false });
@@ -164,11 +145,11 @@ test("autorun gating: autoRunOnAgentStart=false blocks agent_start transition", 
   assert.deepEqual(calls, ["start", "expand"]);
 
   // Simulate agent_end (no manual override, should pause)
-  await fire("agent_end");
+  await lifecycle.onAgentEnd();
   assert.deepEqual(calls, ["start", "expand", "stop", "shrink"]);
 
   // agent_start must be a no-op when autoRunOnAgentStart=false
-  await fire("agent_start");
+  await lifecycle.onAgentStart();
   assert.deepEqual(calls, ["start", "expand", "stop", "shrink"], "agent_start is no-op when autoRunOnAgentStart=false");
 });
 
@@ -239,13 +220,13 @@ test("detach() releases held buttons best-effort", () => {
 // ---------------------------------------------------------------------------
 
 test("resume(): unpauses an auto-paused lifecycle", async () => {
-  const { pi, fire } = makeMockPi();
+  const { pi } = makeMockPi();
   const { emulator } = makeMockEmulator();
   const { render, calls } = makeMockRender();
   const lifecycle = createLifecycle(pi, emulator, () => render, makeOpts());
   lifecycle.attach();
   lifecycle.onRomLoad();
-  await fire("agent_end"); // auto-pause
+  await lifecycle.onAgentEnd(); // auto-pause
   assert.equal(lifecycle.isRunning(), false);
 
   lifecycle.resume?.();
@@ -267,7 +248,7 @@ test("resume(): respects manual pause (alt+shift+g) — L3 still-frame", async (
 });
 
 test("goPaused: state flips before onPause I/O — resume during a slow onPause is not clobbered", async () => {
-  const { pi, fire } = makeMockPi();
+  const { pi } = makeMockPi();
   const { emulator } = makeMockEmulator();
   const { render } = makeMockRender();
 
@@ -284,7 +265,7 @@ test("goPaused: state flips before onPause I/O — resume during a slow onPause 
   lifecycle.onRomLoad();
 
   // agent_end awaits goPaused, which is now blocked inside onPause.
-  const endPromise = fire("agent_end");
+  const endPromise = lifecycle.onAgentEnd();
   assert.equal(lifecycle.isRunning(), false, "state is Paused while onPause is still pending");
 
   // Resume mid-onPause (e.g. auto-focus game-mode entry).

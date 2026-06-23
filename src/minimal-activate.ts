@@ -29,6 +29,8 @@ import type { ButtonSink } from "./types.js";
 const NOOP_LIFECYCLE: Lifecycle = {
   attach() {},
   detach() {},
+  onAgentStart() {},
+  async onAgentEnd() {},
   manualPauseToggle() {},
   isRunning() {
     return false;

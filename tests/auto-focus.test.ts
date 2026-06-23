@@ -6,7 +6,7 @@ import { defined } from "./harness/assert.js";
 
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
-import type { AgentEndEvent, AgentStartEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AudioPlayer } from "../src/audio.js";
 import type { AutoFocusDeps } from "../src/auto-focus.js";
 import { createAutoFocus } from "../src/auto-focus.js";
@@ -28,61 +28,23 @@ async function flushAsync(n = 5): Promise<void> {
 // Mock helpers
 // ---------------------------------------------------------------------------
 
-type EventName = "agent_start" | "agent_end";
-type HandlerFn = (event: AgentStartEvent | AgentEndEvent, ctx: ExtensionContext) => Promise<void> | void;
-
 interface MockPi {
   pi: ExtensionAPI;
-  fireAgentStart(): Promise<void>;
-  fireAgentEnd(): Promise<void>;
   shortcutHandlers: Map<string, (ctx: ExtensionContext) => Promise<void> | void>;
 }
 
+// Auto-focus's agent_start/agent_end logic is exercised by calling its
+// onAgentStart/onAgentEnd methods directly (the session coordinator invokes
+// them in production). The mock pi therefore only needs to capture shortcuts.
 function makeMockPi(): MockPi {
-  const handlers: Map<EventName, HandlerFn[]> = new Map();
-  const shortcutHandlers: Map<string, (ctx: ExtensionContext) => Promise<void> | void> = new Map();
-
+  const shortcutHandlers = new Map<string, (ctx: ExtensionContext) => Promise<void> | void>();
   const pi = {
-    on(event: string, handler: HandlerFn) {
-      const list = handlers.get(event as EventName) ?? [];
-      list.push(handler);
-      handlers.set(event as EventName, list);
-    },
+    on() {},
     registerShortcut(shortcut: string, opts: { handler: (ctx: ExtensionContext) => Promise<void> | void }) {
       shortcutHandlers.set(shortcut, opts.handler);
     },
   } as unknown as ExtensionAPI;
-
-  const mockCtx: ExtensionContext = {
-    ui: {
-      notify() {},
-      custom: async (
-        _factory: (tui: unknown, theme: unknown, kb: unknown, done: (r: undefined) => void) => unknown,
-      ) => {
-        // Default custom: just call factory and return immediately (simulates instant done)
-        return undefined;
-      },
-    },
-  } as unknown as ExtensionContext;
-
-  async function fireEvent(event: EventName): Promise<void> {
-    const list = handlers.get(event) ?? [];
-    const ev = { type: event } as AgentStartEvent | AgentEndEvent;
-    for (const h of list) {
-      await h(ev, mockCtx);
-    }
-  }
-
-  return {
-    pi,
-    async fireAgentStart() {
-      await fireEvent("agent_start");
-    },
-    async fireAgentEnd() {
-      await fireEvent("agent_end");
-    },
-    shortcutHandlers,
-  };
+  return { pi, shortcutHandlers };
 }
 
 interface MockRender {
@@ -134,6 +96,8 @@ function makeMockLifecycle(isRunning = true): Lifecycle {
   return {
     attach() {},
     detach() {},
+    onAgentStart() {},
+    async onAgentEnd() {},
     manualPauseToggle() {},
     isRunning() {
       return isRunning;
@@ -236,58 +200,22 @@ test("auto-enter-on-start: agent_start + debounce → ctx.ui.custom called", asy
   const controllable = makeControllableCustom();
   const ctx = makeCtxWithControllableCustom(controllable);
 
-  // Override the ctx delivered by agent_start by patching the handler after attach.
-  // We fire the event ourselves with the controllable ctx.
-  const deps = makeDeps({ render }, mockPi);
-  const af = createAutoFocus(deps);
+  const af = createAutoFocus(makeDeps({ render }, mockPi));
   af.attach();
 
-  // Patch: replace the agent_start handler's ctx with our controllable one.
-  // Since we fire events manually, inject the right ctx here.
-  // We use fake timers to control the debounce.
   mock.timers.enable({ apis: ["setTimeout"] });
-
   try {
-    // Fire agent_start — this schedules a setTimeout for 500 ms.
-    // We need to fire the event with our controllable ctx. Patch mockPi to use our ctx.
-    const _handlers = mockPi.pi as unknown as { on: (e: string, h: HandlerFn) => void };
-    // Get the stored handler and call it directly with controllable ctx.
-    // We simulate: agent_start fires with controllable ctx.
-    const _piInternal = mockPi.pi as unknown as {
-      [key: string]: unknown;
-    };
-    // Fire using the mock's internal approach but pass our ctx.
-    // Since makeMockPi stores handlers, get the registered agent_start handler:
-    const startHandlers: HandlerFn[] = [];
-    const endHandlers: HandlerFn[] = [];
+    assert.ok(!af.isInGameMode(), "starts in chat mode");
 
-    // Re-attach with a pi that captures handlers we can invoke directly.
-    const pi2 = {
-      on(event: string, handler: HandlerFn) {
-        if (event === "agent_start") startHandlers.push(handler);
-        else if (event === "agent_end") endHandlers.push(handler);
-      },
-      registerShortcut() {},
-    } as unknown as ExtensionAPI;
+    // The coordinator delivers agent_start; here we call the method directly.
+    af.onAgentStart(ctx);
 
-    const deps2 = makeDeps({ render }, { ...mockPi, pi: pi2 });
-    const af2 = createAutoFocus(deps2);
-    af2.attach();
-
-    assert.ok(!af2.isInGameMode(), "starts in chat mode");
-
-    const startEv = { type: "agent_start" } as AgentStartEvent;
-    for (const h of startHandlers) {
-      await h(startEv, ctx);
-    }
-
-    // Advance timer by 500 ms — debounce fires.
+    // Advance timer by 500 ms — debounce fires — then drain microtasks.
     mock.timers.tick(500);
-    // Let the microtask queue drain.
     await flushAsync();
 
     assert.ok(controllable.hasStarted(), "ctx.ui.custom was called after debounce");
-    assert.ok(af2.isInGameMode(), "now in game mode");
+    assert.ok(af.isInGameMode(), "now in game mode");
     assert.ok(useBackendCalls.includes("custom"), "useBackend('custom') called");
   } finally {
     mock.timers.reset();
@@ -299,35 +227,20 @@ test("auto-enter-on-start: agent_start + debounce → ctx.ui.custom called", asy
 // ---------------------------------------------------------------------------
 
 test("debounce-cancels-on-fast-end: fast agent_end prevents game mode entry", async () => {
-  const mockPi2 = makeMockPi();
   const { render } = makeMockRender();
   const controllable = makeControllableCustom();
   const ctx = makeCtxWithControllableCustom(controllable);
 
-  const startHandlers: HandlerFn[] = [];
-  const endHandlers: HandlerFn[] = [];
-  const pi = {
-    on(event: string, handler: HandlerFn) {
-      if (event === "agent_start") startHandlers.push(handler);
-      else if (event === "agent_end") endHandlers.push(handler);
-    },
-    registerShortcut() {},
-  } as unknown as ExtensionAPI;
-
-  const deps = makeDeps({ render }, { ...mockPi2, pi });
-  const af = createAutoFocus(deps);
+  const af = createAutoFocus(makeDeps({ render }, makeMockPi()));
   af.attach();
 
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
-    const startEv = { type: "agent_start" } as AgentStartEvent;
-    const endEv = { type: "agent_end" } as AgentEndEvent;
+    af.onAgentStart(ctx);
 
-    for (const h of startHandlers) await h(startEv, ctx);
-
-    // Advance only 200 ms (< 500 ms debounce) then fire agent_end.
+    // Advance only 200 ms (< 500 ms debounce) then end the turn.
     mock.timers.tick(200);
-    for (const h of endHandlers) await h(endEv, ctx);
+    af.onAgentEnd();
 
     // Advance past the full debounce window.
     mock.timers.tick(400);
@@ -345,21 +258,11 @@ test("debounce-cancels-on-fast-end: fast agent_end prevents game mode entry", as
 // ---------------------------------------------------------------------------
 
 test("manual-override-stays-after-end: manual enter keeps game mode across agent_end", async () => {
-  const mockPi3 = makeMockPi();
   const { render } = makeMockRender();
   const controllable = makeControllableCustom();
   const ctx = makeCtxWithControllableCustom(controllable);
 
-  const endHandlers: HandlerFn[] = [];
-  const pi = {
-    on(event: string, handler: HandlerFn) {
-      if (event === "agent_end") endHandlers.push(handler);
-    },
-    registerShortcut() {},
-  } as unknown as ExtensionAPI;
-
-  const deps = makeDeps({ render }, { ...mockPi3, pi });
-  const af = createAutoFocus(deps);
+  const af = createAutoFocus(makeDeps({ render }, makeMockPi()));
   af.attach();
 
   // Manually enter game mode (simulates alt+g during chat).
@@ -370,9 +273,8 @@ test("manual-override-stays-after-end: manual enter keeps game mode across agent
 
   assert.ok(af.isInGameMode(), "in game mode after enterManual");
 
-  // Fire agent_end — should NOT exit because manualEnteredDuringChat=true.
-  const endEv = { type: "agent_end" } as AgentEndEvent;
-  for (const h of endHandlers) await h(endEv, ctx);
+  // agent_end should NOT exit — manualEnteredDuringChat=true.
+  af.onAgentEnd();
 
   assert.ok(af.isInGameMode(), "still in game mode after agent_end (manual entered during chat)");
 
@@ -386,31 +288,17 @@ test("manual-override-stays-after-end: manual enter keeps game mode across agent
 // ---------------------------------------------------------------------------
 
 test("manual-exit-blocks-next-entry: manual exit suppresses next auto-entry, then resumes", async () => {
-  const startHandlers: HandlerFn[] = [];
-  const endHandlers: HandlerFn[] = [];
   const controllable = makeControllableCustom();
   const ctx = makeCtxWithControllableCustom(controllable);
-
-  const pi = {
-    on(event: string, handler: HandlerFn) {
-      if (event === "agent_start") startHandlers.push(handler);
-      else if (event === "agent_end") endHandlers.push(handler);
-    },
-    registerShortcut() {},
-  } as unknown as ExtensionAPI;
-
   const { render } = makeMockRender();
-  const deps = makeDeps({ render }, { pi } as unknown as MockPi);
-  const af = createAutoFocus(deps);
+
+  const af = createAutoFocus(makeDeps({ render }, makeMockPi()));
   af.attach();
 
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
-    const startEv = { type: "agent_start" } as AgentStartEvent;
-    const endEv = { type: "agent_end" } as AgentEndEvent;
-
     // First: auto-enter via debounce.
-    for (const h of startHandlers) await h(startEv, ctx);
+    af.onAgentStart(ctx);
     mock.timers.tick(500);
     await flushAsync();
 
@@ -422,17 +310,14 @@ test("manual-exit-blocks-next-entry: manual exit suppresses next auto-entry, the
 
     assert.ok(!af.isInGameMode(), "exited game mode");
 
-    // agent_end fires — clears manualExitedDuringGame.
-    for (const h of endHandlers) await h(endEv, ctx);
+    // agent_end clears manualExitedDuringGame so the FOLLOWING agent_start
+    // resumes auto-enter; verify the next turn enters again.
+    af.onAgentEnd();
 
-    // Next agent_start — should be BLOCKED (manualExitedDuringGame was set during the turn).
-    // Per design: cleared on agent_end so the FOLLOWING agent_start resumes auto-enter.
-    // So actually: after agent_end clears the flag, next agent_start should auto-enter.
-    // Let's verify the flag is cleared by checking the next entry works.
     const controllable2 = makeControllableCustom();
     const ctx2 = makeCtxWithControllableCustom(controllable2);
 
-    for (const h of startHandlers) await h(startEv, ctx2);
+    af.onAgentStart(ctx2);
     mock.timers.tick(500);
     await flushAsync();
 
@@ -449,32 +334,20 @@ test("manual-exit-blocks-next-entry: manual exit suppresses next auto-entry, the
 // ---------------------------------------------------------------------------
 
 test("env-opt-out: autoFocusOnAgentStart=false blocks auto-entry but alt+g still works", async () => {
-  const startHandlers: HandlerFn[] = [];
   const controllable = makeControllableCustom();
   const ctx = makeCtxWithControllableCustom(controllable);
-  const shortcutHandlers = new Map<string, (ctx: ExtensionContext) => Promise<void> | void>();
-
-  const pi = {
-    on(event: string, handler: HandlerFn) {
-      if (event === "agent_start") startHandlers.push(handler);
-    },
-    registerShortcut(shortcut: string, opts: { handler: (c: ExtensionContext) => void }) {
-      shortcutHandlers.set(shortcut, opts.handler);
-    },
-  } as unknown as ExtensionAPI;
-
+  const mockPi = makeMockPi();
   const { render } = makeMockRender();
-  const deps = makeDeps({ render, cfg: { autoFocusOnAgentStart: false, autoFocusDebounceMs: 500, scale: 2 } }, {
-    pi,
-  } as unknown as MockPi);
-  const af = createAutoFocus(deps);
+
+  const af = createAutoFocus(
+    makeDeps({ render, cfg: { autoFocusOnAgentStart: false, autoFocusDebounceMs: 500, scale: 2 } }, mockPi),
+  );
   af.attach();
 
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
-    // Fire agent_start — should NOT enter.
-    const startEv = { type: "agent_start" } as AgentStartEvent;
-    for (const h of startHandlers) await h(startEv, ctx);
+    // agent_start should NOT enter (auto-focus disabled).
+    af.onAgentStart(ctx);
     mock.timers.tick(500);
     await flushAsync();
 
@@ -482,7 +355,7 @@ test("env-opt-out: autoFocusOnAgentStart=false blocks auto-entry but alt+g still
     assert.ok(!controllable.hasStarted(), "ctx.ui.custom not called");
 
     // alt+g shortcut should still work.
-    const altG = shortcutHandlers.get("alt+g");
+    const altG = mockPi.shortcutHandlers.get("alt+g");
     assert.ok(altG !== undefined, "alt+g shortcut registered even when auto disabled");
 
     const controllable2 = makeControllableCustom();
@@ -503,40 +376,22 @@ test("env-opt-out: autoFocusOnAgentStart=false blocks auto-entry but alt+g still
 // ---------------------------------------------------------------------------
 
 test("crash-safe: no render guard — events fire without throws when render is undefined", async () => {
-  const startHandlers: HandlerFn[] = [];
-  const endHandlers: HandlerFn[] = [];
-  const pi = {
-    on(event: string, handler: HandlerFn) {
-      if (event === "agent_start") startHandlers.push(handler);
-      else if (event === "agent_end") endHandlers.push(handler);
-    },
-    registerShortcut() {},
-  } as unknown as ExtensionAPI;
-
   // No render — simulates no ROM loaded.
-  const deps = makeDeps({ render: undefined }, { pi } as unknown as MockPi);
-  const af = createAutoFocus(deps);
+  const af = createAutoFocus(makeDeps({ render: undefined }, makeMockPi()));
   af.attach();
 
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
-    const startEv = { type: "agent_start" } as AgentStartEvent;
-    const endEv = { type: "agent_end" } as AgentEndEvent;
     const mockCtx = { ui: { notify() {}, custom: async () => undefined } } as unknown as ExtensionContext;
 
-    // Should not throw.
-    await assert.doesNotReject(async () => {
-      for (const h of startHandlers) await h(startEv, mockCtx);
-    });
+    assert.doesNotThrow(() => af.onAgentStart(mockCtx));
 
     mock.timers.tick(500);
     await flushAsync();
 
     assert.ok(!af.isInGameMode(), "no game mode without render");
 
-    await assert.doesNotReject(async () => {
-      for (const h of endHandlers) await h(endEv, mockCtx);
-    });
+    assert.doesNotThrow(() => af.onAgentEnd());
   } finally {
     mock.timers.reset();
   }
@@ -548,23 +403,13 @@ test("crash-safe: no render guard — events fire without throws when render is 
 // ---------------------------------------------------------------------------
 
 test("no-render-guard: getRender undefined → no entry, no throws", async () => {
-  const startHandlers: HandlerFn[] = [];
-  const pi = {
-    on(event: string, handler: HandlerFn) {
-      if (event === "agent_start") startHandlers.push(handler);
-    },
-    registerShortcut() {},
-  } as unknown as ExtensionAPI;
-
-  const deps = makeDeps({ render: undefined }, { pi } as unknown as MockPi);
-  const af = createAutoFocus(deps);
+  const af = createAutoFocus(makeDeps({ render: undefined }, makeMockPi()));
   af.attach();
 
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
     const mockCtx = { ui: { notify() {}, custom: async () => undefined } } as unknown as ExtensionContext;
-    const startEv = { type: "agent_start" } as AgentStartEvent;
-    for (const h of startHandlers) await h(startEv, mockCtx);
+    af.onAgentStart(mockCtx);
     mock.timers.tick(600);
     await flushAsync();
     assert.ok(!af.isInGameMode(), "no game mode with no render");
@@ -598,6 +443,8 @@ test("alt+g while Paused enters game mode (L3 manual entry during agent_end)", a
   const pausedLifecycle: Lifecycle = {
     attach() {},
     detach() {},
+    onAgentStart() {},
+    async onAgentEnd() {},
     manualPauseToggle() {},
     isRunning() {
       return false;
@@ -689,24 +536,13 @@ test("widget live-tick policy: autoFocus disabled → setWidgetLiveTick(true) (l
 });
 
 test("rapid-start-end churn: 10 cycles below debounce → zero game mode entries", async () => {
-  const startHandlers: HandlerFn[] = [];
-  const endHandlers: HandlerFn[] = [];
   let customCallCount = 0;
 
-  const pi = {
-    on(event: string, handler: HandlerFn) {
-      if (event === "agent_start") startHandlers.push(handler);
-      else if (event === "agent_end") endHandlers.push(handler);
-    },
-    registerShortcut() {},
-  } as unknown as ExtensionAPI;
-
   const { render } = makeMockRender();
-  const deps = makeDeps({ render }, { pi } as unknown as MockPi);
-  const af = createAutoFocus(deps);
+  const af = createAutoFocus(makeDeps({ render }, makeMockPi()));
   af.attach();
 
-  // Override the render's underlying context to count custom calls.
+  // Context whose ui.custom counts how many times game mode would mount.
   const ctx = {
     ui: {
       notify() {},
@@ -719,14 +555,11 @@ test("rapid-start-end churn: 10 cycles below debounce → zero game mode entries
 
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
-    const startEv = { type: "agent_start" } as AgentStartEvent;
-    const endEv = { type: "agent_end" } as AgentEndEvent;
-
     for (let i = 0; i < 10; i++) {
-      for (const h of startHandlers) await h(startEv, ctx);
+      af.onAgentStart(ctx);
       // Advance less than debounce.
       mock.timers.tick(100);
-      for (const h of endHandlers) await h(endEv, ctx);
+      af.onAgentEnd();
     }
 
     // Now advance past debounce — no timer should be pending.
@@ -850,39 +683,25 @@ test("re-enter during slow audio.stop: stale finally must not switch backend bac
 // ---------------------------------------------------------------------------
 
 test("agent_end before component mount: close is replayed after mount, game mode does not linger", async () => {
-  const startHandlers: HandlerFn[] = [];
-  const endHandlers: HandlerFn[] = [];
-  const pi = {
-    on(event: string, handler: HandlerFn) {
-      if (event === "agent_start") startHandlers.push(handler);
-      else if (event === "agent_end") endHandlers.push(handler);
-    },
-    registerShortcut() {},
-  } as unknown as ExtensionAPI;
-
   const { render } = makeMockRender();
   const ctrlAudio = makeControllableAudio();
   ctrlAudio.holdStart(true); // park enter() between mode="game" and the mount
   const controllable = makeControllableCustom();
   const ctx = makeCtxWithControllableCustom(controllable);
 
-  const deps = makeDeps({ render, audio: ctrlAudio.audio }, { pi } as unknown as MockPi);
-  const af = createAutoFocus(deps);
+  const af = createAutoFocus(makeDeps({ render, audio: ctrlAudio.audio }, makeMockPi()));
   af.attach();
 
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
-    const startEv = { type: "agent_start" } as AgentStartEvent;
-    const endEv = { type: "agent_end" } as AgentEndEvent;
-
-    for (const h of startHandlers) await h(startEv, ctx);
+    af.onAgentStart(ctx);
     mock.timers.tick(500); // debounce fires → enter() blocks on audio.start
     assert.ok(af.isInGameMode(), "mode flipped to game pre-mount");
     assert.ok(!controllable.hasStarted(), "component not mounted yet");
 
     // Agent ends while enter() is still awaiting audio.start — liveComponent
     // is undefined, so exit() can only record the close request.
-    for (const h of endHandlers) await h(endEv, ctx);
+    af.onAgentEnd();
 
     // Mount completes — the recorded close must fire immediately.
     ctrlAudio.holdStart(false);
@@ -901,19 +720,8 @@ test("agent_end before component mount: close is replayed after mount, game mode
 // ---------------------------------------------------------------------------
 
 test("enterManual failure: manualEnteredDuringChat is cleared, later auto-entries still auto-exit", async () => {
-  const startHandlers: HandlerFn[] = [];
-  const endHandlers: HandlerFn[] = [];
-  const pi = {
-    on(event: string, handler: HandlerFn) {
-      if (event === "agent_start") startHandlers.push(handler);
-      else if (event === "agent_end") endHandlers.push(handler);
-    },
-    registerShortcut() {},
-  } as unknown as ExtensionAPI;
-
   const { render } = makeMockRender();
-  const deps = makeDeps({ render }, { pi } as unknown as MockPi);
-  const af = createAutoFocus(deps);
+  const af = createAutoFocus(makeDeps({ render }, makeMockPi()));
   af.attach();
 
   // Manual entry whose custom UI rejects. Must not throw out of enterManual
@@ -936,15 +744,13 @@ test("enterManual failure: manualEnteredDuringChat is cleared, later auto-entrie
     // manualEnteredDuringChat=true would keep game mode open forever.
     const controllable = makeControllableCustom();
     const ctx = makeCtxWithControllableCustom(controllable);
-    const startEv = { type: "agent_start" } as AgentStartEvent;
-    const endEv = { type: "agent_end" } as AgentEndEvent;
 
-    for (const h of startHandlers) await h(startEv, ctx);
+    af.onAgentStart(ctx);
     mock.timers.tick(500);
     await flushAsync();
     assert.ok(af.isInGameMode(), "auto-entered game mode");
 
-    for (const h of endHandlers) await h(endEv, ctx);
+    af.onAgentEnd();
     await flushAsync();
     assert.ok(!af.isInGameMode(), "agent_end auto-exits (flag was not stuck)");
   } finally {
@@ -953,37 +759,28 @@ test("enterManual failure: manualEnteredDuringChat is cleared, later auto-entrie
 });
 
 // ---------------------------------------------------------------------------
-// detach(): the still-registered agent_start handler must self-disarm
-// (pi.on has no unsubscribe), so no post-detach game mode re-entry
+// detach() cancels a pending auto-entry debounce timer so no game mode mounts
+// after teardown. (The "ignore agent events after detach" guarantee now lives
+// on the session coordinator — see session-coordinator.test.ts.)
 // ---------------------------------------------------------------------------
 
-test("detach: post-detach agent_start does not re-enter game mode", async () => {
-  const startHandlers: HandlerFn[] = [];
-  const pi = {
-    on(event: string, handler: HandlerFn) {
-      if (event === "agent_start") startHandlers.push(handler);
-    },
-    registerShortcut() {},
-  } as unknown as ExtensionAPI;
-
+test("detach cancels a pending auto-entry timer", async () => {
   const { render } = makeMockRender();
   const controllable = makeControllableCustom();
   const ctx = makeCtxWithControllableCustom(controllable);
 
-  const deps = makeDeps({ render }, { pi } as unknown as MockPi);
-  const af = createAutoFocus(deps);
+  const af = createAutoFocus(makeDeps({ render }, makeMockPi()));
   af.attach();
-  af.detach();
 
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
-    const startEv = { type: "agent_start" } as AgentStartEvent;
-    for (const h of startHandlers) await h(startEv, ctx);
+    af.onAgentStart(ctx); // arms the debounce timer
+    af.detach(); // must cancel it before it fires
     mock.timers.tick(600);
     await flushAsync();
 
-    assert.ok(!controllable.hasStarted(), "ctx.ui.custom never called after detach");
-    assert.ok(!af.isInGameMode(), "no game mode re-entry from a detached handler");
+    assert.ok(!controllable.hasStarted(), "pending entry cancelled by detach");
+    assert.ok(!af.isInGameMode(), "no game mode after detach");
   } finally {
     mock.timers.reset();
   }
@@ -1008,25 +805,14 @@ test("auto-entry and manual alt+g entry both call lifecycle.resume()", async () 
       },
     };
 
-    const startHandlers: HandlerFn[] = [];
-    const pi = {
-      on(event: string, handler: HandlerFn) {
-        if (event === "agent_start") startHandlers.push(handler);
-      },
-      registerShortcut() {},
-    } as unknown as ExtensionAPI;
-
-    const mockPi = makeMockPi();
     const { render } = makeMockRender();
     const controllable = makeControllableCustom();
     const ctx = makeCtxWithControllableCustom(controllable);
 
-    const deps = makeDeps({ render, lifecycle: lifecycleWithResume }, { ...mockPi, pi });
-    const af = createAutoFocus(deps);
+    const af = createAutoFocus(makeDeps({ render, lifecycle: lifecycleWithResume }, makeMockPi()));
     af.attach();
 
-    const startEv = { type: "agent_start" } as AgentStartEvent;
-    for (const h of startHandlers) await h(startEv, ctx);
+    af.onAgentStart(ctx);
     mock.timers.tick(500);
     await flushAsync();
 
