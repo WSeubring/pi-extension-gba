@@ -1,6 +1,7 @@
 # pi-extension-gba
 
 [![CI](https://github.com/WSeubring/pi-extension-gba/actions/workflows/ci.yml/badge.svg)](https://github.com/WSeubring/pi-extension-gba/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/pi-extension-gba)](https://www.npmjs.com/package/pi-extension-gba)
 
 **Play Game Boy Advance games inside [pi](https://github.com/badlogic/pi-mono) — right in your terminal, while the agent works.**
 
@@ -37,6 +38,14 @@ interferes with the work.
 - **(Optional) an audio tool** — `pw-cat`, `pacat`, `ffplay`, or `aplay` on your `$PATH`, only if you want sound.
 
 ## Install
+
+From npm:
+
+```sh
+pi install npm:pi-extension-gba
+```
+
+> The `npm:` prefix is required — `pi install pi-extension-gba` is interpreted as a local filesystem path, not an npm package.
 
 From GitHub:
 
