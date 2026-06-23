@@ -1,0 +1,153 @@
+Subject: [PATCH 2/2] wasm: expose outputBuffer pointer + dimensions to JS
+Author: pi-extension-gba vendor-builder
+
+The shipped build has no JS-callable pixel-read API (see V2 in
+docs/verify/V1-V2-V7.md). Calling Module.screenshot() writes a PNG
+into the Emscripten VFS -- re-encoding per frame inside the WASM is
+far too slow for a 30 fps render loop. We need direct access to the
+RGBA bytes the core has already written.
+
+mGBA's Emscripten renderer keeps a single outputBuffer (pointer stored
+on struct mEmscriptenRenderer) that renderer->core->setVideoBuffer is
+pointed at inside loadGame() (main.c). The core writes into it each
+emulated frame in ABGR8888 format (SDL_PIXELFORMAT_ABGR8888, which is
+RGBA little-endian byte order: byte 0 = R, 1 = G, 2 = B, 3 = A). The
+format is a direct match for fast-png / upng-js.
+
+This patch adds five EMSCRIPTEN_KEEPALIVE accessors in main.c:
+
+  uint8_t* getPixelBuffer(void)        -- pointer to outputBuffer
+  int      getPixelBufferSize(void)    -- width*height*BYTES_PER_PIXEL
+  int      getPixelBufferStride(void)  -- bytes per row
+  int      getPixelBufferWidth(void)   -- current video width (GBA=240)
+  int      getPixelBufferHeight(void)  -- current video height (GBA=160)
+
+Wraps them in pre.js as:
+
+  Module.getPixelBuffer() -> Uint8Array  (view into HEAPU8, NOT a copy;
+                                          callers that need to persist
+                                          across stepFrames must .slice())
+  Module.getPixelBufferDimensions() -> { width, height, stride }
+
+And appends TS declarations to mgba.d.ts.
+
+The pointer is stable for the lifetime of the currently-loaded ROM --
+loadGame() re-allocates the SDL texture on ROM switch, so callers must
+re-read the pointer after loadGame. During steady-state play the
+pointer does not move.
+
+Apply with: patch -p1 < 0002-export-getPixelBuffer.patch
+Base commit: thenick775/mgba @ be30a34e913da1ba7f040d3db4e10f700ce49f76
+Depends on: 0001-add-node-environment.patch for HEAPU8 export.
+
+---
+ src/platform/wasm/main.c    | 39 +++++++++++++++++++++++++++++++++++++
+ src/platform/wasm/pre.js    | 20 +++++++++++++++++++
+ src/platform/wasm/mgba.d.ts | 19 ++++++++++++++++++
+ 3 files changed, 78 insertions(+)
+
+--- a/src/platform/wasm/main.c
++++ b/src/platform/wasm/main.c
+@@ -70,6 +70,45 @@
+  * Exposed core contract methods
+  */
+
++/* Pixel buffer accessors (pi-extension-gba vendor patch).
++ * The core renders into renderer->outputBuffer, an SDL_PIXELFORMAT_ABGR8888
++ * surface -- RGBA little-endian bytes. Dimensions match the current video
++ * size (240x160 for GBA). Returning a raw pointer into WASM linear memory
++ * lets JS do HEAPU8.subarray(ptr, ptr+size) and avoid copying through the
++ * Emscripten VFS. */
++EMSCRIPTEN_KEEPALIVE uint8_t* getPixelBuffer(void) {
++	if (!renderer || !renderer->outputBuffer) return NULL;
++	return (uint8_t*) renderer->outputBuffer;
++}
++
++EMSCRIPTEN_KEEPALIVE int getPixelBufferSize(void) {
++	if (!renderer || !renderer->core || !renderer->outputBuffer) return 0;
++	unsigned w = 0, h = 0;
++	renderer->core->currentVideoSize(renderer->core, &w, &h);
++	return (int) (w * h * BYTES_PER_PIXEL);
++}
++
++EMSCRIPTEN_KEEPALIVE int getPixelBufferStride(void) {
++	if (!renderer || !renderer->core || !renderer->outputBuffer) return 0;
++	unsigned w = 0, h = 0;
++	renderer->core->currentVideoSize(renderer->core, &w, &h);
++	return (int) (w * BYTES_PER_PIXEL);
++}
++
++EMSCRIPTEN_KEEPALIVE int getPixelBufferWidth(void) {
++	if (!renderer || !renderer->core) return 0;
++	unsigned w = 0, h = 0;
++	renderer->core->currentVideoSize(renderer->core, &w, &h);
++	return (int) w;
++}
++
++EMSCRIPTEN_KEEPALIVE int getPixelBufferHeight(void) {
++	if (!renderer || !renderer->core) return 0;
++	unsigned w = 0, h = 0;
++	renderer->core->currentVideoSize(renderer->core, &w, &h);
++	return (int) h;
++}
++
+ EMSCRIPTEN_KEEPALIVE bool screenshot(char* fileName) {
+ 	bool success = false;
+ 	int mode = O_CREAT | O_TRUNC | O_WRONLY;
+--- a/src/platform/wasm/pre.js
++++ b/src/platform/wasm/pre.js
+@@ -348,6 +348,26 @@
+   return screenshot(fileName);
+ };
+
++// Vendored by pi-extension-gba: return a Uint8Array VIEW over the
++// current framebuffer (RGBA little-endian, width*height*4 bytes). The
++// returned array is backed by HEAPU8; callers that need to persist it
++// across stepFrames boundaries must .slice() it.
++Module.getPixelBuffer = () => {
++  const getPixelBuffer = cwrap('getPixelBuffer', 'number', []);
++  const getPixelBufferSize = cwrap('getPixelBufferSize', 'number', []);
++  const ptr = getPixelBuffer();
++  const size = getPixelBufferSize();
++  if (!ptr || !size) return null;
++  return HEAPU8.subarray(ptr, ptr + size);
++};
++
++Module.getPixelBufferDimensions = () => {
++  const w = cwrap('getPixelBufferWidth', 'number', [])();
++  const h = cwrap('getPixelBufferHeight', 'number', [])();
++  const s = cwrap('getPixelBufferStride', 'number', [])();
++  return { width: w, height: h, stride: s };
++};
++
+ Module.saveState = (slot) => {
+   const saveState = cwrap('saveState', 'boolean', ['number']);
+   return saveState(slot);
+--- a/src/platform/wasm/mgba.d.ts
++++ b/src/platform/wasm/mgba.d.ts
+@@ -397,6 +397,25 @@
+     screenshot(fileName?: string): boolean;
+
+     /**
++     * Vendored by pi-extension-gba.
++     *
++     * Returns a Uint8Array VIEW (not a copy) over the current framebuffer
++     * in RGBA little-endian byte order (width*height*4 bytes). Caller
++     * must `.slice()` the result to persist it across emulator ticks.
++     *
++     * Returns null when no ROM is loaded.
++     */
++    getPixelBuffer(): Uint8Array | null;
++
++    /**
++     * Vendored by pi-extension-gba.
++     *
++     * Returns the current framebuffer dimensions in pixels plus the row
++     * stride in bytes.
++     */
++    getPixelBufferDimensions(): { width: number; height: number; stride: number };
++
++    /**
+      * Sets the current fast forward multiplier.
+      *
+      * - `multiplier = 1` = normal speed

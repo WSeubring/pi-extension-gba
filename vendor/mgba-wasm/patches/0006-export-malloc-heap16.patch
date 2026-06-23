@@ -1,0 +1,40 @@
+Subject: Export _malloc / _free / HEAP16 for Phase 8a JS scratch buffer
+
+Phase 8a (src/emulator.ts) allocates a persistent 8 KiB int16_t scratch
+buffer via `module._malloc(SCRATCH_BYTES)` at emulator construct and
+reads samples via `module.HEAP16.slice(...)`. Post-0004 build does not
+export any of _malloc, _free, or HEAP16 (grep wasmExports in the
+generated mgba.js — only KEEPALIVE functions land there; malloc/free
+are eliminated by the linker when no KEEPALIVE references them).
+
+Runtime symptom: `mod._malloc is not a function` at
+`createEmulator()`, visible after `pi install .` in a real pi session.
+
+Fix: extend the link flags in src/platform/wasm/CMakeLists.txt to
+explicitly export the three symbols. HEAP16 added to
+EXPORTED_RUNTIME_METHODS (sibling of HEAPU8/HEAPU32 already there).
+_malloc + _free added via a new EXPORTED_FUNCTIONS flag; _main kept
+because it is the (no-op post-0004) entrypoint and emcc drops all
+unreferenced entrypoints when EXPORTED_FUNCTIONS is set.
+
+Apply with: patch -p1 < 0006-export-malloc-heap16.patch
+Depends on: 0001, 0004 (applied first)
+
+---
+ src/platform/wasm/CMakeLists.txt | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+--- a/src/platform/wasm/CMakeLists.txt
++++ b/src/platform/wasm/CMakeLists.txt
+@@ -4,8 +4,9 @@
+ 	-s USE_PTHREADS=0 \
+ 	-s TOTAL_MEMORY=256mb \
+ 	-s ALLOW_MEMORY_GROWTH=1 \
+-	-s EXPORTED_RUNTIME_METHODS=[\"FS\",\"cwrap\",\"addFunction\",\"removeFunction\",\"HEAPU8\",\"HEAPU32\",\"getValue\",\"UTF8ToString\"] \
+-	-s RESERVED_FUNCTION_POINTERS=16 \
++	-s EXPORTED_RUNTIME_METHODS=[\"FS\",\"cwrap\",\"addFunction\",\"removeFunction\",\"HEAPU8\",\"HEAPU32\",\"HEAP16\",\"getValue\",\"UTF8ToString\"] \
++	-s EXPORTED_FUNCTIONS=[\"_main\",\"_malloc\",\"_free\"] \
++	-s RESERVED_FUNCTION_POINTERS=16 \
+ 	-s ENVIRONMENT='web,worker,node' \
+ 	-s NODEJS_CATCH_EXIT=0 \
+ 	-s NODEJS_CATCH_REJECTION=0 \

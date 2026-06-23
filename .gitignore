@@ -1,0 +1,18 @@
+node_modules/
+dist/
+!vendor/mgba-wasm/dist/
+roms/*
+!roms/README.md
+experiments/*/node_modules/
+experiments/*/dist/
+*.log
+.DS_Store
+.claude/settings.local.json
+*.tsbuildinfo
+
+# Internal engineering docs — kept local, not published
+docs/*
+!docs/screenshots/
+HANDOFF.md
+SPEC.md
+TEAM.md

@@ -1,0 +1,57 @@
+Subject: [PATCH 3/3] wasm: loosen mGBA factory canvas option to optional+nullable
+Author: pi-extension-gba vendor-builder
+
+The upstream @thenick775/mgba hand-written TS declaration at
+src/platform/wasm/mgba.d.ts types the `mGBA` factory as:
+
+    export default function mGBA(options: {
+      canvas: HTMLCanvasElement;
+    }): Promise<mGBAEmulator>;
+
+This is accurate for the upstream (browser-only) build, where consumers
+always hand in a real `<canvas>`. Our vendored build (see patch 0001)
+adds `node` to ENVIRONMENT, and in Node there is no DOM and no
+HTMLCanvasElement. The Node hot path inside mgba.js does not actually
+read `options.canvas` -- the core renders into `outputBuffer` which we
+expose via `Module.getPixelBuffer()` (patch 0002). The `canvas`
+property is browser-only at runtime.
+
+Previously `src/emulator.ts` worked around the type mismatch with a
+`canvas: undefined as unknown as HTMLCanvasElement` cast (Escalation
+E1 in docs/design/phase-1-emulator.md). That cast lies to the type
+system and poisons downstream consumers. This patch narrows the lie
+to a single, documented place: the type surface.
+
+The change:
+
+- `canvas: HTMLCanvasElement` -> `canvas?: HTMLCanvasElement | null`.
+
+Optional + nullable covers both call styles (`mGBA({})` and
+`mGBA({ canvas: null })`) while still letting browser consumers pass a
+real canvas. The property is kept (not removed) because browser
+consumers rely on it.
+
+This is a TYPE-SURFACE-ONLY change. The runtime code in pre.js /
+mgba.js is untouched -- patch 0001 already handled the Node runtime
+environment. Any code paths inside the glue that do
+`.canvas.appendChild(...)`-style access remain gated by
+ENVIRONMENT_IS_WEB / ENVIRONMENT_IS_WORKER and are left alone.
+
+Apply with: patch -p1 < 0003-loosen-canvas-type.patch
+Base commit: thenick775/mgba @ be30a34e913da1ba7f040d3db4e10f700ce49f76
+Depends on: 0001-add-node-environment.patch (for Node runtime).
+
+---
+ src/platform/wasm/mgba.d.ts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/src/platform/wasm/mgba.d.ts
++++ b/src/platform/wasm/mgba.d.ts
+@@ -557,6 +557,6 @@
+    */
+   // eslint-disable-next-line import/no-default-export
+   export default function mGBA(options: {
+-    canvas: HTMLCanvasElement;
++    canvas?: HTMLCanvasElement | null;
+   }): Promise<mGBAEmulator>;
+ }

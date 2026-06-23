@@ -1,0 +1,58 @@
+#!/usr/bin/env expect -f
+# PTY harness — Phase 10b
+# Spawns pi, loads the GBA extension via /gba, waits for the emulator to
+# start rendering, then exercises the alt+g exit path and shuts pi down.
+# Every byte emitted is logged to /tmp/pi-harness.log for parse.mjs.
+
+set timeout 10
+set logfile "/tmp/pi-harness.log"
+log_file -noappend $logfile
+
+spawn pi
+
+# pi's banner is wrapped in SGR/hyperlink escape sequences so anchoring on
+# "pi v0.67.68" fails because of intervening bytes. Sleep instead of regex —
+# 3 s is enough for pi to finish its startup animation on a warm cache.
+sleep 3
+
+# Invoke the GBA extension slash-command.
+send -- "/gba\r"
+
+# pi's "running Pokemon" notify is also buried in SGR. Sleep past it and let
+# the emulator/Kitty renderer emit a few frames.
+sleep 5
+
+# Send alt+g (legacy ESC+g byte sequence) to trigger the exit-game-mode path.
+send -- "\x1bg"
+
+# pi should respond — either by returning to its normal prompt or emitting
+# some output. We allow any non-eof output or a short timeout (the extension
+# may not print anything explicit on exit, so we don't fail on timeout here).
+expect {
+    -re {.+} { }
+    timeout     { }
+    eof {
+        puts stderr "pi exited unexpectedly after alt+g"
+        exit 1
+    }
+}
+
+# Graceful shutdown. pi's slash-command ctrl+c cancels the current
+# request; a second ctrl+c exits the REPL. If it still hangs, close the
+# PTY master and reap the child — the log file already captured every
+# byte we need, so parse.mjs doesn't depend on a clean EOF.
+set timeout 5
+send -- "\x03"
+sleep 0.5
+send -- "\x03"
+
+expect {
+    eof { }
+    timeout {
+        # Close spawn id and kill the child so npm's && gate can advance.
+        catch { close }
+        catch { wait -nowait }
+    }
+}
+
+exit 0

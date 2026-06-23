@@ -1,0 +1,22 @@
+{
+  "node": "v25.9.0",
+  "steps": [
+    {
+      "name": "import default",
+      "ok": true,
+      "detail": "typeof=function"
+    },
+    {
+      "name": "mGBA({}) resolved",
+      "ok": false,
+      "detail": "ReferenceError: Worker is not defined"
+    },
+    {
+      "name": "mGBA({canvas:stub}) resolved",
+      "ok": false,
+      "detail": "ReferenceError: Worker is not defined"
+    }
+  ],
+  "moduleKeys": null,
+  "error": null
+}

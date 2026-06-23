@@ -1,0 +1,7 @@
+{
+  "name": "pi-extension-gba-phase-5-smoke",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Phase 5 smoke: persistence round-trip + corrupt .state recovery."
+}

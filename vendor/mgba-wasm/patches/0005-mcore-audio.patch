@@ -1,0 +1,131 @@
+Subject: [PATCH 5/5] wasm: expose mCore audio buffer to JS via getAudioSamples
+Author: pi-extension-gba vendor-builder
+
+ADR 0006 (docs/decisions/0006-mcore-audio-rebuild.md) Option A: add a
+minimal pull-based audio bridge so Phase 8b (audio subprocess) can read
+s16le stereo PCM out of the SDL-free WASM host without relinking SDL.
+
+Design, after investigating the post-0004 source tree
+(/src/include/mgba/core/core.h, /src/src/gba/core.c,
+/src/src/util/audio-buffer.c inside the vendor Docker image):
+
+  * mGBA's mCore already exposes a fully resampled, interleaved stereo
+    `mAudioBuffer*` via `core->getAudioBuffer(core)`. It is populated
+    incrementally from inside `core->runFrame(core)`. The upstream SDL
+    path pulled from it via `mSDLRunAudio`; we pull from it via a new
+    JS-callable KEEPALIVE. No blip_buf, no new C files, no new link
+    edges.
+
+  * Default GBA sample rate is 16.78 MHz / 0x8000 = 32_768 Hz (see
+    /src/src/gba/audio.c:46) — matches docs/design/phase-8-audio-plan.md
+    L7 exactly, so no setIntegerCoreSetting("audioSampleRate") hook
+    needs re-adding (ADR 0006 §Risks).
+
+  * The buffer is two-channel (GBA audio.c delegates to GBAudioInit
+    which calls mAudioBufferInit(&audio->buffer, AUDIO_BUFFER_SAMPLES,
+    2) — /src/src/gb/audio.c:54), with circle-buffer capacity
+    0x4000 = 16384 frames. `core->setAudioBufferSize(core, 2048)` sets
+    the *producer threshold*, not the capacity, so 2048 plays nicely
+    with a 16384-frame ring without risk of overflow-drop between JS
+    reads at ~60 Hz.
+
+  * `mCoreSyncProduceAudio` / `mCoreSyncLockAudio` / `mCoreSyncConsumeAudio`
+    all NULL-guard (see /src/src/core/sync.c:82,98,114). Our SDL-free
+    host never calls `core->setSync`, so `audio->p->sync` is NULL and
+    the in-core production path simply writes samples to the ring
+    buffer without throttling. This is exactly what we want for a
+    pull-based consumer.
+
+  * `mAudioBufferRead(buf, dest, count)` treats `count` as *frames*
+    (stereo pairs), reading `count * 2 * sizeof(int16_t)` bytes
+    interleaved L,R,L,R... and returning the actual frame count read.
+    Maps 1:1 to the ADR 0006 signature
+    `getAudioSamples(int16_t* dest, uint32_t maxFrames) -> actualFrames`.
+
+This patch makes three additive edits to the post-0004 main.c:
+
+  1. Add `#include <mgba-util/audio-buffer.h>` for mAudioBufferRead.
+  2. In `loadGame`, after `core->setVideoBuffer(...)` and before
+     `core->reset(...)`, call `core->setAudioBufferSize(core, 2048)` to
+     match docs/design/phase-8-audio-plan.md L7 (2048-frame producer
+     threshold).
+  3. Add `EMSCRIPTEN_KEEPALIVE uint32_t getAudioSamples(int16_t* dest,
+     uint32_t maxFrames)` between the pixel-buffer accessors and the
+     runFrame export. Returns the actual number of stereo *frames*
+     written into `dest` (not raw int16_t samples), never blocks,
+     writes zero frames if the core is uninitialised or the ring is
+     empty. The JS caller must allocate `dest` at >= maxFrames * 2 *
+     sizeof(int16_t) bytes (e.g. Int16Array(4096) for maxFrames=2048).
+
+No CMakeLists.txt changes: the mCore library is already linked into
+mgba.js and `mAudioBufferRead` lives in the same archive
+(libmgba.a -> /src/src/util/audio-buffer.c, confirmed at
+/src/build-wasm/CMakeFiles/mgba.dir/src/util/audio-buffer.c.o). Symbol
+export is achieved by `EMSCRIPTEN_KEEPALIVE` alone, matching the
+pattern used for runFrame / getPixelBuffer / buttonPress / ... added
+by patches 0002 and 0004.
+
+Apply with: patch -p1 < 0005-mcore-audio.patch
+Base commit: thenick775/mgba @ be30a34e913da1ba7f040d3db4e10f700ce49f76
+Depends on: 0001, 0002, 0003, 0004 (patches to the already-stripped
+main.c).
+
+--- a/src/platform/wasm/main.c
++++ b/src/platform/wasm/main.c
+@@ -34,6 +34,7 @@
+ #include <mgba/core/serialize.h>
+ #include <mgba/core/interface.h>
+ #include <mgba/core/version.h>
++#include <mgba-util/audio-buffer.h>
+
+ #include <emscripten.h>
+
+@@ -119,6 +120,34 @@
+ 	return GBA_FB_H;
+ }
+
++/* ----- Audio buffer accessor (ADR 0006, vendor patch 0005) ----- */
++
++/*
++ * getAudioSamples: pull-style reader for mCore's internal stereo ring
++ * buffer. Returns the number of STEREO FRAMES (not samples) written
++ * into `dest`; each frame is two int16_t values, interleaved L,R.
++ *
++ * Semantics:
++ *   - Non-blocking. If fewer frames are available than `maxFrames`,
++ *     writes fewer and returns the actual count.
++ *   - Returns 0 if the core is uninitialised (no ROM loaded), if the
++ *     core has no audio buffer yet (shouldn't happen post-loadGame),
++ *     or if `dest` is NULL / `maxFrames` is zero.
++ *   - Caller MUST size `dest` at >= maxFrames * 2 * sizeof(int16_t)
++ *     bytes (e.g. Int16Array(4096) for maxFrames=2048).
++ *
++ * The underlying circle buffer is populated incrementally from within
++ * `core->runFrame(core)`. Drain every tick to avoid dropped samples;
++ * the 16 384-frame ring gives ~0.5 s of slack at 32 768 Hz.
++ */
++EMSCRIPTEN_KEEPALIVE uint32_t getAudioSamples(int16_t* dest, uint32_t maxFrames) {
++	if (!core || !dest || maxFrames == 0) return 0;
++	struct mAudioBuffer* buf = core->getAudioBuffer(core);
++	if (!buf) return 0;
++	size_t got = mAudioBufferRead(buf, dest, (size_t) maxFrames);
++	return (uint32_t) got;
++}
++
+ /* ----- Frame stepping ----- */
+
+ /* Advance the emulator by one video frame. JS calls this from the render
+@@ -390,6 +419,13 @@
+ 	mCoreAutoloadPatch(core);
+
+ 	core->setVideoBuffer(core, videoBuffer, GBA_FB_W);
++
++	/* Set audio producer threshold to 2048 frames, matching
++	 * docs/design/phase-8-audio-plan.md L7. Ring-buffer capacity is
++	 * fixed at AUDIO_BUFFER_SAMPLES = 0x4000 = 16 384 frames inside
++	 * mCore; this call only adjusts the batching threshold. */
++	core->setAudioBufferSize(core, 2048);
++
+ 	core->reset(core);
+
+ 	keyMask = 0;

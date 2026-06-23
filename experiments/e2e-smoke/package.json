@@ -1,0 +1,10 @@
+{
+  "name": "pi-extension-gba-phase-1-smoke",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Phase 1 smoke script: boot emulator, dump boot.png.",
+  "dependencies": {
+    "fast-png": "^6.2.0"
+  }
+}

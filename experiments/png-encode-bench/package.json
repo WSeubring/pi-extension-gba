@@ -1,0 +1,14 @@
+{
+  "name": "v5-png-encode-bench",
+  "version": "1.0.0",
+  "private": true,
+  "description": "V5 de-risk: PNG-encode microbenchmark for a 480x320 RGBA framebuffer. Compares fast-png and upng-js.",
+  "type": "module",
+  "scripts": {
+    "bench": "node bench.mjs"
+  },
+  "dependencies": {
+    "fast-png": "^8.0.0",
+    "upng-js": "^2.1.0"
+  }
+}

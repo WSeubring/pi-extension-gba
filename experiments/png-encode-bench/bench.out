@@ -1,0 +1,10 @@
+Generating 1050 frames (480x320 RGBA)...
+Node v25.9.0 on linux/x64
+Running 1000 encodes per library (after 50 warmup iterations).
+
+--- Results ---
+fast-png      mean=10.26ms  p50=9.03ms  p95=13.24ms  p99=13.66ms  max=19.60ms  bytes/frame~=262.7KB
+upng-js       mean=31.19ms  p50=31.04ms  p95=32.43ms  p99=34.96ms  max=49.44ms  bytes/frame~=3.8KB
+
+Budget at 30 fps: 33.33 ms per frame.
+Budget at 15 fps: 66.67 ms per frame.

@@ -1,0 +1,1253 @@
+Subject: [PATCH 4/4] wasm: strip SDL2 host, drive mcore directly from JS
+Author: pi-extension-gba vendor-builder
+
+ADR 0002 background (docs/decisions/0002-mgba-sdl-free-vendor-rebuild.md):
+patches 0001-0003 left the vendored build structurally dependent on SDL2.
+Even with -pthread dropped from the top-level flags, the SDL2 port
+re-adds pthread internally, emitting memory.atomic.wait32 instructions
+that block Node's main thread during callMain. Skipping callMain avoids
+the hang but leaves SDL's renderer uninitialised, so the getPixelBuffer
+pointer (vendor patch 0002) reads from a null outputBuffer.
+
+This patch replaces the SDL2-based host wholesale. The new
+src/platform/wasm/main.c:
+
+  - Drives mGBA's mcore API directly: mCoreFind / core->init /
+    core->setVideoBuffer / core->runFrame / core->setKeys /
+    mCoreSaveState / mCoreLoadState. No SDL_Init, no
+    SDL_CreateRenderer, no SDL_PollEvent, no WebGL.
+  - Allocates a single 240x160x4-byte static videoBuffer; setVideoBuffer
+    is called once per loadGame, after which runFrame writes into it on
+    each JS-driven tick.
+  - Re-exports the V7 JS API surface (loadGame, pauseGame, resumeGame,
+    saveState, loadState, saveStateSlot, loadStateSlot, screenshot,
+    buttonPress, buttonUnpress, addCoreCallbacks, quitGame, quitMgba,
+    quickReload, bindKey, setEventEnable, toggleRewind,
+    setIntegerCoreSetting, pauseAudio, resumeAudio, getVolume,
+    setVolume, getMainLoopTimingMode/Value, setMainLoopTiming,
+    setFastForwardMultiplier, getFastForwardMultiplier, autoSaveState,
+    loadAutoSaveState, autoLoadCheats). Audio, rewind, fast-forward,
+    bindKey, event-toggling, and core-settings endpoints are no-op
+    stubs in v1 (SPEC §1 non-goals).
+  - Re-homes the getPixelBuffer* exports from patch 0002. They now
+    return the static videoBuffer rather than dereferencing an SDL
+    renderer struct. Size/stride/width/height are constant (GBA).
+  - Adds a new EMSCRIPTEN_KEEPALIVE runFrame() export. This is the
+    synchronous frame-step the JS render loop calls each tick per ADR
+    0002. mCore->setKeys is mirrored from the current keyMask before
+    each runFrame.
+  - Keeps main() defined (so callMain has a target) but empty. No
+    SDL_Init, no timer, no futex wait.
+
+CMakeLists.txt changes:
+
+  - -s USE_SDL=2 -> -s USE_SDL=0 on both LINK and COMPILE options.
+  - Adds -s USE_PTHREADS=0 (explicit guard against transitive
+    re-inclusion).
+  - Removes -s MIN_WEBGL_VERSION=2 / MAX_WEBGL_VERSION=2 (no GL).
+  - Drops ../sdl/sdl-audio.c, ../sdl/sdl-events.c, ../sdl/sdl-text.c
+    from the sources list.
+  - Keeps ALLOW_MEMORY_GROWTH=1, ENVIRONMENT=web,worker,node,
+    EXPORT_ES6=1, MODULARIZE=1, extended EXPORTED_RUNTIME_METHODS,
+    RESERVED_FUNCTION_POINTERS, NODEJS_CATCH_* — all still required.
+
+Apply with: patch -p1 < 0004-strip-sdl.patch
+Base commit: thenick775/mgba @ be30a34e913da1ba7f040d3db4e10f700ce49f76
+Depends on: 0001-add-node-environment.patch, 0002-export-getPixelBuffer.patch
+
+--- a/src/platform/wasm/CMakeLists.txt
++++ b/src/platform/wasm/CMakeLists.txt
+@@ -1,6 +1,7 @@
+ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} \
+ 	-O3 \
+-	-s USE_SDL=2 \
++	-s USE_SDL=0 \
++	-s USE_PTHREADS=0 \
+ 	-s TOTAL_MEMORY=256mb \
+ 	-s ALLOW_MEMORY_GROWTH=1 \
+ 	-s EXPORTED_RUNTIME_METHODS=[\"FS\",\"cwrap\",\"addFunction\",\"removeFunction\",\"HEAPU8\",\"HEAPU32\",\"getValue\",\"UTF8ToString\"] \
+@@ -12,15 +13,13 @@
+ 	-s MODULARIZE=1 \
+ 	-s EXPORT_NAME=${CMAKE_PROJECT_NAME} \
+ 	-s ELIMINATE_DUPLICATE_FUNCTIONS=1 \
+-	-s MIN_WEBGL_VERSION=2 \
+-	-s MAX_WEBGL_VERSION=2 \
+ 	-gsource-map \
+ 	--flto \
+ 	--pre-js ${CMAKE_CURRENT_SOURCE_DIR}/pre.js")
+-add_executable(${BINARY_NAME}.js main.c memory.c ../sdl/sdl-audio.c ../sdl/sdl-events.c ../sdl/sdl-text.c)
++add_executable(${BINARY_NAME}.js main.c memory.c)
+ set_target_properties(${BINARY_NAME}.js PROPERTIES
+ 	COMPILE_DEFINITIONS "${OS_DEFINES};${FEATURE_DEFINES};${FUNCTION_DEFINES}"
+-	COMPILE_OPTIONS "-s;USE_SDL=2"
++	COMPILE_OPTIONS "-s;USE_SDL=0"
+ 	LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/pre.js"
+ 	OUTPUT_NAME ${BINARY_NAME})
+ target_link_libraries(${BINARY_NAME}.js ${BINARY_NAME} ${OS_LIB})
+--- a/src/platform/wasm/main.c
++++ b/src/platform/wasm/main.c
+@@ -1,35 +1,66 @@
+ /* Copyright (c) 2013-2019 Jeffrey Pfau
++ * Copyright (c) 2026 pi-extension-gba vendor-builder
+  *
+  * This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+-#include "main.h"
++
++/*
++ * SDL-free mGBA WASM host.
++ *
++ * Replaces the upstream SDL2-based Emscripten host with a minimal mcore
++ * driver. The SDL2 path depends on pthreads (futex) and WebGL even when
++ * -s USE_SDL is gated, which blocks Node's main thread during callMain
++ * and prevents headless rendering. This host:
++ *
++ *   - Allocates a single 240*160*4-byte framebuffer.
++ *   - Drives mCore directly via mCoreFind / setVideoBuffer / runFrame /
++ *     setKeys / mCoreSaveState / mCoreLoadState.
++ *   - Preserves the JS-callable export surface required by
++ *     @thenick775/mgba's pre.js (V7 API: loadGame, pauseGame, resumeGame,
++ *     saveState, loadState, saveStateSlot, loadStateSlot,
++ *     addCoreCallbacks, buttonPress, buttonUnpress, screenshot, etc.)
++ *     plus the getPixelBuffer* exports added by vendor patch 0002 and a
++ *     new explicit runFrame() export for JS-driven stepping.
++ *
++ * No SDL_Init, no SDL_CreateRenderer, no SDL_PollEvent, no WebGL,
++ * no -pthread, no futex. See vendor/mgba-wasm/patches/0004-strip-sdl.patch
++ * and docs/decisions/0002-mgba-sdl-free-vendor-rebuild.md for context.
++ */
+ 
+ #include <mgba-util/vfs.h>
+ #include <mgba/core/core.h>
++#include <mgba/core/log.h>
+ #include <mgba/core/serialize.h>
+-#include <mgba/core/thread.h>
++#include <mgba/core/interface.h>
+ #include <mgba/core/version.h>
+-#include <mgba/gba/interface.h>
+-#include <mgba/internal/gba/input.h>
+-
+-#include "platform/sdl/sdl-audio.h"
+-#include "platform/sdl/sdl-events.h"
+-#include "platform/sdl/sdl-text.h"
+ 
+-#include <SDL2/SDL.h>
+-#include <SDL2/SDL_keyboard.h>
+ #include <emscripten.h>
+-#include <emscripten/threading.h>
+ 
+-// global renderer
+-static struct mEmscriptenRenderer* renderer = NULL;
++#include <fcntl.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#ifndef PATH_MAX
++#include <limits.h>
++#endif
++
++#define GBA_FB_W   240
++#define GBA_FB_H   160
++#define GBA_FB_BPP 4
++
++/* Single persistent framebuffer. The core writes into this each frame via
++ * core->setVideoBuffer(). Sized for GBA; GB/GBC would need a resize, but
++ * this build only targets GBA per SPEC §1. */
++static uint32_t videoBuffer[GBA_FB_W * GBA_FB_H];
+ 
+-// log utilities
+-static void _log(struct mLogger*, int category, enum mLogLevel level, const char* format, va_list args);
+-static struct mLogger logCtx = { .log = _log };
++static struct mCore* core = NULL;
++static uint32_t keyMask = 0;
+ 
+-// stored core callback function pointers
++/* Stored callback function pointers, mirroring the upstream
++ * addCoreCallbacks contract (see pre.js Module.addCoreCallbacks). */
+ typedef struct {
+ 	void (*alarm)(void*);
+ 	void (*coreCrashed)(void*);
+@@ -43,22 +74,22 @@
+ 
+ static CallbackStorage callbackStorage;
+ 
+-// Macro to create wrapper functions, necessary as some core callbacks want to access
+-// things like the file system on the CPU thread, which can only be done on the main thread.
+-#define DEFINE_WRAPPER(field)                            \
+-	static void wrapped_##field(void* context) {         \
+-		MAIN_THREAD_EM_ASM(                              \
+-		    {                                            \
+-			    const funcPtr = $0;                      \
+-			    const ctx = $1;                          \
+-			    const func = wasmTable.get(funcPtr);     \
+-			    if (func)                                \
+-				    func(ctx);                           \
+-		    },                                           \
+-		    (int) callbackStorage.field, (int) context); \
++/* Wrapper macro: core callbacks may fire on a non-main context in the
++ * threaded upstream build.  With pthreads disabled this is effectively a
++ * direct call, but preserve the dispatch shape for symmetry. */
++#define DEFINE_WRAPPER(field)                               \
++	static void wrapped_##field(void* context) {            \
++		MAIN_THREAD_EM_ASM(                                 \
++		    {                                               \
++			    const funcPtr = $0;                         \
++			    const ctx = $1;                             \
++			    const func = wasmTable.get(funcPtr);        \
++			    if (func)                                   \
++				    func(ctx);                              \
++		    },                                              \
++		    (int) callbackStorage.field, (int) context);    \
+ 	}
+ 
+-// Generate wrapper functions
+ DEFINE_WRAPPER(alarm)
+ DEFINE_WRAPPER(coreCrashed)
+ DEFINE_WRAPPER(keysRead)
+@@ -66,808 +97,349 @@
+ DEFINE_WRAPPER(videoFrameEnded)
+ DEFINE_WRAPPER(videoFrameStarted)
+ 
+-/**
+- * Exposed core contract methods
+- */
++/* ----- Pixel buffer accessors (vendor patch 0002, re-homed here) ----- */
+ 
+-/* Pixel buffer accessors (pi-extension-gba vendor patch).
+- * The core renders into renderer->outputBuffer, an SDL_PIXELFORMAT_ABGR8888
+- * surface -- RGBA little-endian bytes. Dimensions match the current video
+- * size (240x160 for GBA). Returning a raw pointer into WASM linear memory
+- * lets JS do HEAPU8.subarray(ptr, ptr+size) and avoid copying through the
+- * Emscripten VFS. */
+ EMSCRIPTEN_KEEPALIVE uint8_t* getPixelBuffer(void) {
+-	if (!renderer || !renderer->outputBuffer) return NULL;
+-	return (uint8_t*) renderer->outputBuffer;
++	return (uint8_t*) videoBuffer;
+ }
+ 
+ EMSCRIPTEN_KEEPALIVE int getPixelBufferSize(void) {
+-	if (!renderer || !renderer->core || !renderer->outputBuffer) return 0;
+-	unsigned w = 0, h = 0;
+-	renderer->core->currentVideoSize(renderer->core, &w, &h);
+-	return (int) (w * h * BYTES_PER_PIXEL);
++	return GBA_FB_W * GBA_FB_H * GBA_FB_BPP;
+ }
+ 
+ EMSCRIPTEN_KEEPALIVE int getPixelBufferStride(void) {
+-	if (!renderer || !renderer->core || !renderer->outputBuffer) return 0;
+-	unsigned w = 0, h = 0;
+-	renderer->core->currentVideoSize(renderer->core, &w, &h);
+-	return (int) (w * BYTES_PER_PIXEL);
++	return GBA_FB_W * GBA_FB_BPP;
+ }
+ 
+ EMSCRIPTEN_KEEPALIVE int getPixelBufferWidth(void) {
+-	if (!renderer || !renderer->core) return 0;
+-	unsigned w = 0, h = 0;
+-	renderer->core->currentVideoSize(renderer->core, &w, &h);
+-	return (int) w;
++	return GBA_FB_W;
+ }
+ 
+ EMSCRIPTEN_KEEPALIVE int getPixelBufferHeight(void) {
+-	if (!renderer || !renderer->core) return 0;
+-	unsigned w = 0, h = 0;
+-	renderer->core->currentVideoSize(renderer->core, &w, &h);
+-	return (int) h;
++	return GBA_FB_H;
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE bool screenshot(char* fileName) {
+-	bool success = false;
+-	int mode = O_CREAT | O_TRUNC | O_WRONLY;
+-	struct VFile* vf;
+-
+-	if (!renderer->core)
+-		return false;
+-
+-	struct VDir* dir = renderer->core->dirs.screenshot;
+-
+-	if (strlen(fileName)) {
+-		vf = dir->openFile(dir, fileName, mode);
+-	} else {
+-		vf = VDirFindNextAvailable(dir, renderer->core->dirs.baseName, "-", ".png", mode);
+-	}
+-
+-	if (!vf)
+-		return false;
+-
+-	success = mCoreTakeScreenshotVF(renderer->core, vf);
+-	vf->close(vf);
++/* ----- Frame stepping ----- */
+ 
+-	return success;
++/* Advance the emulator by one video frame. JS calls this from the render
++ * tick (see SPEC §3.3 step 1 post-ADR-0002). Synchronous — returns after
++ * the core has written one full frame into videoBuffer. */
++EMSCRIPTEN_KEEPALIVE void runFrame(void) {
++	if (!core) return;
++	core->setKeys(core, keyMask);
++	core->runFrame(core);
+ }
+ 
++/* ----- Input ----- */
++
+ EMSCRIPTEN_KEEPALIVE void buttonPress(int id) {
+-	if (renderer->core && renderer->thread) {
+-		renderer->core->addKeys(renderer->core, 1 << id);
+-	}
++	if (id < 0 || id > 31) return;
++	keyMask |= (1u << id);
++	if (core) core->setKeys(core, keyMask);
+ }
+ 
+ EMSCRIPTEN_KEEPALIVE void buttonUnpress(int id) {
+-	if (renderer->core && renderer->thread) {
+-		renderer->core->clearKeys(renderer->core, 1 << id);
+-	}
++	if (id < 0 || id > 31) return;
++	keyMask &= ~(1u << id);
++	if (core) core->setKeys(core, keyMask);
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE void toggleRewind(bool toggle) {
+-	if (renderer->thread)
+-		mCoreThreadSetRewinding(renderer->thread, toggle);
+-}
+-
+-EMSCRIPTEN_KEEPALIVE void setVolume(float vol) {
+-	if (vol > 2.0 || vol < 0)
+-		return; // this is a percentage so more than 200% is insane.
++/* ----- Lifecycle ----- */
+ 
+-	int volume = (int) (vol * 0x100);
+-	if (renderer->core) {
+-		mCoreConfigSetDefaultIntValue(&renderer->core->config, "volume", volume);
+-		renderer->core->reloadConfigOption(renderer->core, "volume", &renderer->core->config);
+-	}
++/* Pause / resume are exposed for API compatibility with the SDL host, but
++ * since the JS frame loop drives runFrame() directly there is no timer to
++ * pause. These are no-ops; gating the render tick is the JS caller's
++ * responsibility. */
++EMSCRIPTEN_KEEPALIVE void pauseGame(void) {
++	/* no-op */
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE float getVolume() {
+-	if (renderer->core)
+-		return (float) renderer->core->opts.volume / 0x100;
+-	else
+-		return 0.0;
+-}
+-
+-EMSCRIPTEN_KEEPALIVE int getMainLoopTimingMode() {
+-	int mode = -1;
+-	int value = -1;
+-	emscripten_get_main_loop_timing(&mode, &value);
+-	return mode;
+-}
+-
+-EMSCRIPTEN_KEEPALIVE int getMainLoopTimingValue() {
+-	int mode = -1;
+-	int value = -1;
+-	emscripten_get_main_loop_timing(&mode, &value);
+-	return value;
++EMSCRIPTEN_KEEPALIVE void resumeGame(void) {
++	/* no-op */
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE void setMainLoopTiming(int mode, int value) {
+-	emscripten_set_main_loop_timing(mode, value);
++EMSCRIPTEN_KEEPALIVE void pauseAudio(void) {
++	/* no-op: v1 build has no audio path (SPEC §1 non-goals) */
+ }
+ 
+-// full handling of fast forward, interrupts and thread logic included
+-void updateFastForward(double multiplier) {
+-	if (renderer->thread && renderer->videoSync) {
+-		mCoreThreadInterrupt(renderer->thread);
+-		renderer->thread->impl->sync.videoFrameWait = (multiplier > 1) ? false : renderer->videoSync;
+-		renderer->thread->impl->sync.audioWait = (multiplier > 1) ? true : renderer->audioSync;
+-		mCoreThreadContinue(renderer->thread);
+-	}
+-
+-	if (renderer->core && renderer->thread && multiplier != 0) {
+-		renderer->thread->impl->sync.fpsTarget = (double) renderer->baseFpsTarget * multiplier;
+-		mCoreConfigSetDefaultFloatValue(&renderer->core->config, "fpsTarget",
+-		                                (double) renderer->baseFpsTarget * multiplier);
+-		renderer->core->reloadConfigOption(renderer->core, "fpsTarget", &renderer->core->config);
+-
+-		if (renderer->frameSkip == 0) {
+-			// fast forward starts at 1, frameskip starts at 0
+-			mCoreConfigSetDefaultIntValue(&renderer->core->config, "frameskip", multiplier - 1);
+-			renderer->core->reloadConfigOption(renderer->core, "frameskip", &renderer->core->config);
+-		}
+-	}
++EMSCRIPTEN_KEEPALIVE void resumeAudio(void) {
++	/* no-op: v1 build has no audio path (SPEC §1 non-goals) */
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE void setFastForwardMultiplier(int multiplier) {
+-	if (multiplier > 0) {
+-		renderer->fastForwardMultiplier = multiplier;
+-	} else if (multiplier < 0) {
+-		renderer->fastForwardMultiplier = -1.0 / (double) multiplier;
+-	}
+-
+-	updateFastForward(renderer->fastForwardMultiplier);
++EMSCRIPTEN_KEEPALIVE float getVolume(void) {
++	return 0.0f;
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE int getFastForwardMultiplier() {
+-	double m = renderer->fastForwardMultiplier;
+-	// reverse the translation used in setFastForwardMultiplier
+-	return (m < 1.0) ? (int) (-1.0 / m) : (int) m;
+-}
+-
+-EMSCRIPTEN_KEEPALIVE void quitGame() {
+-	if (renderer->core && renderer->thread) {
+-		emscripten_pause_main_loop();
+-		mSDLPauseAudio(&renderer->audio);
+-		mSDLDeinitAudio(&renderer->audio);
+-
+-		mCoreThreadEnd(renderer->thread);
+-		mCoreThreadJoin(renderer->thread);
+-		free(renderer->thread);
+-		renderer->thread = NULL;
+-
+-		renderer->core->unloadROM(renderer->core);
+-		mCoreConfigDeinit(&renderer->core->config);
+-		mInputMapDeinit(&renderer->core->inputMap);
+-		renderer->core->deinit(renderer->core);
+-		renderer->core = NULL;
+-		renderer->audio.core = NULL;
+-
+-		renderer->autoSaveStateTimer.lastTime = 0;
+-	}
++EMSCRIPTEN_KEEPALIVE void setVolume(float vol) {
++	(void) vol;
++	/* no-op */
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE void quitMgba() {
+-	exit(0);
++EMSCRIPTEN_KEEPALIVE int getMainLoopTimingMode(void) {
++	return 0;
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE bool autoSaveState() {
+-	if (renderer->core && renderer->thread) {
+-		bool result = false;
+-		struct VDir* autosaveDir = VDirOpen("/autosave");
+-		char autoSaveName[PATH_MAX + 14];
+-		snprintf(autoSaveName, sizeof(autoSaveName), "%s_auto.ss", renderer->core->dirs.baseName);
+-
+-		struct VFile* vf = autosaveDir->openFile(autosaveDir, autoSaveName, (O_CREAT | O_TRUNC | O_RDWR));
+-
+-		if (!vf)
+-			return false;
+-
+-		mCoreThreadInterrupt(renderer->thread);
+-		result = mCoreSaveStateNamed(renderer->core, vf, SAVESTATE_ALL);
+-		mCoreThreadContinue(renderer->thread);
+-		bool successfullyClosed = vf->close(vf);
+-
+-		return result && successfullyClosed;
+-	}
+-
+-	return false;
++EMSCRIPTEN_KEEPALIVE int getMainLoopTimingValue(void) {
++	return 0;
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE bool loadAutoSaveState() {
+-	bool result = false;
+-	if (renderer->core && renderer->thread) {
+-		struct VDir* autosaveDir = VDirOpen("/autosave");
+-		char autoSaveName[PATH_MAX + 14];
+-		snprintf(autoSaveName, sizeof(autoSaveName), "%s_auto.ss", renderer->core->dirs.baseName);
+-
+-		struct VFile* vf = autosaveDir->openFile(autosaveDir, autoSaveName, O_RDONLY);
+-
+-		if (!vf)
+-			return false;
+-
+-		mCoreThreadInterrupt(renderer->thread);
+-		result = mCoreLoadStateNamed(renderer->core, vf, SAVESTATE_ALL);
+-		mCoreThreadContinue(renderer->thread);
+-		return result;
+-	}
+-	return false;
++EMSCRIPTEN_KEEPALIVE void setMainLoopTiming(int mode, int value) {
++	(void) mode;
++	(void) value;
++	/* no-op: JS drives runFrame() on its own schedule */
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE void quickReload() {
+-	if (renderer->core && renderer->thread) {
+-		mCoreThreadInterrupt(renderer->thread);
+-
+-		renderer->core->reset(renderer->core);
+-
+-		if (renderer->restoreAutoSaveStateOnLoad) {
+-			bool successfulLoad = loadAutoSaveState();
+-			if (successfulLoad && callbackStorage.autoSaveStateLoaded)
+-				callbackStorage.autoSaveStateLoaded(NULL);
+-		}
+-
+-		mCoreThreadContinue(renderer->thread);
+-	}
++EMSCRIPTEN_KEEPALIVE void setFastForwardMultiplier(int multiplier) {
++	(void) multiplier;
++	/* no-op in v1; fast-forward is a JS-side concern (call runFrame more) */
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE void pauseGame() {
+-	mSDLPauseAudio(&renderer->audio);
+-
+-	if (renderer->thread)
+-		mCoreThreadPause(renderer->thread);
+-
+-	renderer->autoSaveStateTimer.lastTime = 0;
+-
+-	emscripten_pause_main_loop();
++EMSCRIPTEN_KEEPALIVE int getFastForwardMultiplier(void) {
++	return 1;
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE void resumeGame() {
+-	mSDLResumeAudio(&renderer->audio);
+-
+-	if (renderer->thread)
+-		mCoreThreadUnpause(renderer->thread);
+-
+-	emscripten_resume_main_loop();
++EMSCRIPTEN_KEEPALIVE void setEventEnable(bool toggle) {
++	(void) toggle;
++	/* no-op: no SDL event pump */
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE void pauseAudio() {
+-	mSDLPauseAudio(&renderer->audio);
++EMSCRIPTEN_KEEPALIVE void bindKey(char* bindingName, int inputCode) {
++	(void) bindingName;
++	(void) inputCode;
++	/* no-op: input is id-based via buttonPress/buttonUnpress */
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE void resumeAudio() {
+-	mSDLResumeAudio(&renderer->audio);
++EMSCRIPTEN_KEEPALIVE void toggleRewind(bool toggle) {
++	(void) toggle;
++	/* no-op: rewind not implemented in v1 */
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE void setEventEnable(bool toggle) {
+-	int state = toggle ? SDL_ENABLE : SDL_DISABLE;
+-	SDL_EventState(SDL_TEXTINPUT, state);
+-	SDL_EventState(SDL_KEYDOWN, state);
+-	SDL_EventState(SDL_KEYUP, state);
+-	SDL_EventState(SDL_MOUSEMOTION, state);
+-	SDL_EventState(SDL_MOUSEBUTTONDOWN, state);
+-	SDL_EventState(SDL_MOUSEBUTTONUP, state);
++EMSCRIPTEN_KEEPALIVE void setIntegerCoreSetting(char* settingName, int value) {
++	(void) settingName;
++	(void) value;
++	/* no-op in v1; most settings map to SDL/audio/thread paths that are
++	 * gone. Kept as a silent accept so JS wrappers don't throw. */
+ }
+ 
+-// bindingName is the key name of what you want to bind to an input
+-// inputCode is the code of the key input, see keyBindings in pre.js
+-// this should work for a good variety of keys, but not all are supported yet
+-EMSCRIPTEN_KEEPALIVE void bindKey(char* bindingName, int inputCode) {
+-	int bindingSDLKeyCode = SDL_GetKeyFromName(bindingName);
+-
+-	if (renderer->core)
+-		mInputBindKey(&renderer->core->inputMap, SDL_BINDING_KEY, bindingSDLKeyCode, inputCode);
+-}
++/* ----- Save state ----- */
+ 
+ EMSCRIPTEN_KEEPALIVE bool saveState(int slot) {
+-	bool result = false;
+-	if (renderer->core && renderer->thread) {
+-		mCoreThreadInterrupt(renderer->thread);
+-		result = mCoreSaveState(renderer->core, slot, SAVESTATE_ALL);
+-		mCoreThreadContinue(renderer->thread);
+-		return result;
+-	}
+-	return false;
++	if (!core) return false;
++	return mCoreSaveState(core, slot, SAVESTATE_ALL);
+ }
+ 
+ EMSCRIPTEN_KEEPALIVE bool loadState(int slot) {
+-	bool result = false;
+-	if (renderer->core && renderer->thread) {
+-		mCoreThreadInterrupt(renderer->thread);
+-		result = mCoreLoadState(renderer->core, slot, SAVESTATE_ALL);
+-		mCoreThreadContinue(renderer->thread);
+-		return result;
+-	}
+-	return false;
++	if (!core) return false;
++	return mCoreLoadState(core, slot, SAVESTATE_ALL);
+ }
+ 
+-// loads all cheats files located in the cores cheatsPath,
+-// cheat files must match the name of the rom they are
+-// to be applied to, and must end with the extension .cheats
+-// supported cheat formats:
+-//  - mGBA custom format
+-//  - libretro format
+-//  - EZFCht format
+-EMSCRIPTEN_KEEPALIVE bool autoLoadCheats() {
+-	if (renderer->core && renderer->thread) {
+-		bool result = false;
+-		mCoreThreadInterrupt(renderer->thread);
+-		result = mCoreAutoloadCheats(renderer->core);
+-		mCoreThreadContinue(renderer->thread);
+-		return result;
+-	}
+-	return false;
++EMSCRIPTEN_KEEPALIVE bool saveStateSlot(int slot, int flags) {
++	if (!core) return false;
++	return mCoreSaveState(core, slot, flags);
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE bool loadGame(const char* name, const char* savePathOverride) {
+-	if (renderer->thread && renderer->core) {
+-		quitGame();
+-	}
+-	renderer->core = mCoreFind(name);
+-	if (!renderer->core) {
++EMSCRIPTEN_KEEPALIVE bool loadStateSlot(int slot, int flags) {
++	if (!core) return false;
++	return mCoreLoadState(core, slot, flags);
++}
++
++EMSCRIPTEN_KEEPALIVE bool autoSaveState(void) {
++	if (!core) return false;
++	struct VDir* autosaveDir = VDirOpen("/autosave");
++	if (!autosaveDir) return false;
++	char autoSaveName[PATH_MAX + 14];
++	snprintf(autoSaveName, sizeof(autoSaveName), "%s_auto.ss", core->dirs.baseName);
++	struct VFile* vf = autosaveDir->openFile(autosaveDir, autoSaveName, O_CREAT | O_TRUNC | O_RDWR);
++	if (!vf) {
++		autosaveDir->close(autosaveDir);
+ 		return false;
+ 	}
+-	renderer->core->init(renderer->core);
+-	renderer->core->opts.savegamePath = strdup("/data/saves");
+-	renderer->core->opts.savestatePath = strdup("/data/states");
+-	renderer->core->opts.cheatsPath = strdup("/data/cheats");
+-	renderer->core->opts.screenshotPath = strdup("/data/screenshots");
+-	renderer->core->opts.patchPath = strdup("/data/patches");
+-	renderer->core->opts.audioBuffers = renderer->audio.samples;
+-
+-	mCoreConfigInit(&renderer->core->config, "wasm");
+-	struct mCoreOptions defaultConfigOpts = { .useBios = true,
+-		                                      .rewindEnable = renderer->rewindEnable,
+-		                                      .rewindBufferCapacity = renderer->rewindBufferCapacity,
+-		                                      .rewindBufferInterval = renderer->rewindBufferInterval,
+-		                                      .videoSync = renderer->videoSync,
+-		                                      .audioSync = renderer->audioSync,
+-		                                      .fpsTarget = renderer->baseFpsTarget,
+-		                                      .volume = 0x100,
+-		                                      .logLevel = mLOG_WARN | mLOG_ERROR | mLOG_FATAL };
+-
+-	mCoreConfigLoadDefaults(&renderer->core->config, &defaultConfigOpts);
+-	mCoreLoadConfig(renderer->core);
+-
+-	mCoreLoadFile(renderer->core, name);
+-	mCoreConfigSetDefaultIntValue(&renderer->core->config, "timestepSync", renderer->timestepSync);
+-	mCoreConfigSetDefaultValue(&renderer->core->config, "idleOptimization", "detect");
+-	renderer->core->reloadConfigOption(renderer->core, "idleOptimization", &renderer->core->config);
+-	mCoreConfigSetDefaultIntValue(&renderer->core->config, "allowOpposingDirections", true);
+-	renderer->core->reloadConfigOption(renderer->core, "allowOpposingDirections", &renderer->core->config);
+-	mCoreConfigSetDefaultIntValue(&renderer->core->config, "threadedVideo", renderer->threadedVideo);
+-	renderer->core->reloadConfigOption(renderer->core, "threadedVideo", &renderer->core->config);
+-	mInputMapInit(&renderer->core->inputMap, &GBAInputInfo);
+-	mDirectorySetMapOptions(&renderer->core->dirs, &renderer->core->opts);
+-
+-	if (savePathOverride)
+-		mCoreLoadSaveFile(renderer->core, savePathOverride, false);
+-	else
+-		mCoreAutoloadSave(renderer->core);
+-
+-	mCoreAutoloadCheats(renderer->core);
+-	mCoreAutoloadPatch(renderer->core);
+-	mSDLInitBindingsGBA(&renderer->core->inputMap);
+-
+-	unsigned w, h;
+-	renderer->core->baseVideoSize(renderer->core, &w, &h);
+-	if (renderer->sdlTex) {
+-		SDL_DestroyTexture(renderer->sdlTex);
+-	}
+-	renderer->sdlTex =
+-	    SDL_CreateTexture(renderer->sdlRenderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, w, h);
+-
+-	int stride;
+-	SDL_LockTexture(renderer->sdlTex, 0, (void**) &renderer->outputBuffer, &stride);
+-	renderer->core->setVideoBuffer(renderer->core, renderer->outputBuffer, stride / BYTES_PER_PIXEL);
+-	renderer->core->setAudioBufferSize(renderer->core, renderer->audio.samples);
+-
+-	renderer->core->reset(renderer->core);
+-
+-	renderer->core->currentVideoSize(renderer->core, &w, &h);
+-	SDL_SetWindowSize(renderer->window, w, h);
+-	EM_ASM(
+-	    {
+-		    Module.canvas.width = $0;
+-		    Module.canvas.height = $1;
+-	    },
+-	    w, h);
+-
+-	emscripten_resume_main_loop();
+-	return true;
++	bool result = mCoreSaveStateNamed(core, vf, SAVESTATE_ALL);
++	bool closed = vf->close(vf);
++	autosaveDir->close(autosaveDir);
++	return result && closed;
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE bool saveStateSlot(int slot, int flags) {
+-	if (!renderer->core) {
++EMSCRIPTEN_KEEPALIVE bool loadAutoSaveState(void) {
++	if (!core) return false;
++	struct VDir* autosaveDir = VDirOpen("/autosave");
++	if (!autosaveDir) return false;
++	char autoSaveName[PATH_MAX + 14];
++	snprintf(autoSaveName, sizeof(autoSaveName), "%s_auto.ss", core->dirs.baseName);
++	struct VFile* vf = autosaveDir->openFile(autosaveDir, autoSaveName, O_RDONLY);
++	if (!vf) {
++		autosaveDir->close(autosaveDir);
+ 		return false;
+ 	}
+-	return mCoreSaveState(renderer->core, slot, flags);
++	bool result = mCoreLoadStateNamed(core, vf, SAVESTATE_ALL);
++	vf->close(vf);
++	autosaveDir->close(autosaveDir);
++	return result;
+ }
+ 
+-EMSCRIPTEN_KEEPALIVE bool loadStateSlot(int slot, int flags) {
+-	if (!renderer->core) {
+-		return false;
++EMSCRIPTEN_KEEPALIVE bool autoLoadCheats(void) {
++	if (!core) return false;
++	return mCoreAutoloadCheats(core);
++}
++
++/* ----- Screenshot ----- */
++
++EMSCRIPTEN_KEEPALIVE bool screenshot(char* fileName) {
++	if (!core) return false;
++	int mode = O_CREAT | O_TRUNC | O_WRONLY;
++	struct VDir* dir = core->dirs.screenshot;
++	if (!dir) return false;
++	struct VFile* vf;
++	if (fileName && strlen(fileName)) {
++		vf = dir->openFile(dir, fileName, mode);
++	} else {
++		vf = VDirFindNextAvailable(dir, core->dirs.baseName, "-", ".png", mode);
+ 	}
+-	return mCoreLoadState(renderer->core, slot, flags);
++	if (!vf) return false;
++	bool success = mCoreTakeScreenshotVF(core, vf);
++	vf->close(vf);
++	return success;
+ }
+ 
+-// Function to ensure all callbacks execute on the main thread
++/* ----- Callback registration ----- */
++
++/* Clear all slots first, then store any non-null pointers from the caller.
++ * The JS wrapper (pre.js Module.addCoreCallbacks) passes 0 (null) for
++ * callbacks that should be unregistered. */
+ EMSCRIPTEN_KEEPALIVE void
+ addCoreCallbacks(void (*alarmCallbackPtr)(void*), void (*coreCrashedCallbackPtr)(void*),
+                  void (*keysReadCallbackPtr)(void*), void (*saveDataUpdatedCallbackPtr)(void*),
+                  void (*videoFrameEndedCallbackPtr)(void*), void (*videoFrameStartedCallbackPtr)(void*),
+                  void (*autoSaveStateCapturedCallbackPtr)(void*), void (*autoSaveStateLoadedCallbackPtr)(void*)) {
+-	if (renderer->core) {
+-		struct mCoreCallbacks callbacks = {};
+-		// clear core callbacks
+-		renderer->core->clearCoreCallbacks(renderer->core);
+-		// clear ad-hoc callbacks
+-		callbackStorage.autoSaveStateCaptured = NULL;
+-		callbackStorage.autoSaveStateLoaded = NULL;
+-
+-		// the thread has its own suite of callbacks where ours should overlay on top,
+-		// after clearing the current core callbacks since there is not a mechanism to
+-		// filter the callbacks, we need to re-add the thread callbacks
+-		if (renderer->thread)
+-			mCoreThreadAddCoreCallbacks(renderer->thread);
+-
+-		// store original function pointers
+-		if (alarmCallbackPtr)
+-			callbackStorage.alarm = alarmCallbackPtr;
+-		if (coreCrashedCallbackPtr)
+-			callbackStorage.coreCrashed = coreCrashedCallbackPtr;
+-		if (keysReadCallbackPtr)
+-			callbackStorage.keysRead = keysReadCallbackPtr;
+-		if (saveDataUpdatedCallbackPtr)
+-			callbackStorage.savedataUpdated = saveDataUpdatedCallbackPtr;
+-		if (videoFrameEndedCallbackPtr)
+-			callbackStorage.videoFrameEnded = videoFrameEndedCallbackPtr;
+-		if (videoFrameStartedCallbackPtr)
+-			callbackStorage.videoFrameStarted = videoFrameStartedCallbackPtr;
+-
+-		// store original ad-hoc function pointers
+-		if (autoSaveStateCapturedCallbackPtr)
+-			callbackStorage.autoSaveStateCaptured = autoSaveStateCapturedCallbackPtr;
+-		if (autoSaveStateLoadedCallbackPtr)
+-			callbackStorage.autoSaveStateLoaded = autoSaveStateLoadedCallbackPtr;
+-
+-		// assign wrapped functions
+-		if (alarmCallbackPtr)
+-			callbacks.alarm = wrapped_alarm;
+-		if (coreCrashedCallbackPtr)
+-			callbacks.coreCrashed = wrapped_coreCrashed;
+-		if (keysReadCallbackPtr)
+-			callbacks.keysRead = wrapped_keysRead;
+-		if (saveDataUpdatedCallbackPtr)
+-			callbacks.savedataUpdated = wrapped_savedataUpdated;
+-		if (videoFrameEndedCallbackPtr)
+-			callbacks.videoFrameEnded = wrapped_videoFrameEnded;
+-		if (videoFrameStartedCallbackPtr)
+-			callbacks.videoFrameStarted = wrapped_videoFrameStarted;
++	if (!core) return;
+ 
+-		renderer->core->addCoreCallbacks(renderer->core, &callbacks);
+-	}
+-}
++	core->clearCoreCallbacks(core);
+ 
+-EMSCRIPTEN_KEEPALIVE void setIntegerCoreSetting(char* settingName, int value) {
+-	// set renderer settings
+-	if (strcmp(settingName, "audioSampleRate") == 0 && value >= 0) {
+-		renderer->audio.sampleRate = value;
+-	} else if (strcmp(settingName, "audioBufferSize") == 0 && value >= 0) {
+-		renderer->audio.samples = value;
+-	} else if (strcmp(settingName, "videoSync") == 0 && (value == true || value == false)) {
+-		renderer->videoSync = value;
+-	} else if (strcmp(settingName, "audioSync") == 0 && (value == true || value == false)) {
+-		renderer->audioSync = value;
+-	} else if (strcmp(settingName, "threadedVideo") == 0 && (value == true || value == false)) {
+-		renderer->threadedVideo = value;
+-	} else if (strcmp(settingName, "rewindEnable") == 0 && (value == true || value == false)) {
+-		renderer->rewindEnable = value;
+-	} else if (strcmp(settingName, "rewindBufferCapacity") == 0 && value > 0) {
+-		renderer->rewindBufferCapacity = value;
+-	} else if (strcmp(settingName, "rewindBufferInterval") == 0 && value > 0) {
+-		renderer->rewindBufferInterval = value;
+-	} else if (strcmp(settingName, "frameSkip") == 0 && value >= 0) {
+-		renderer->frameSkip = value;
+-	} else if (strcmp(settingName, "baseFpsTarget") == 0 && value >= 0) {
+-		renderer->baseFpsTarget = value;
+-	} else if (strcmp(settingName, "timestepSync") == 0 && (value == true || value == false)) {
+-		renderer->timestepSync = value;
+-	} else if (strcmp(settingName, "showFpsCounter") == 0 && (value == true || value == false)) {
+-		renderer->showFpsCounter = value;
+-	} else if (strcmp(settingName, "autoSaveStateEnable") == 0 && (value == true || value == false)) {
+-		renderer->autoSaveStateEnable = value;
+-	} else if (strcmp(settingName, "restoreAutoSaveStateOnLoad") == 0 && (value == true || value == false)) {
+-		renderer->restoreAutoSaveStateOnLoad = value;
+-	} else if (strcmp(settingName, "autoSaveStateTimerIntervalSeconds") == 0 && value > 0) {
+-		renderer->autoSaveStateTimer.intervalSeconds = value;
+-	}
++	callbackStorage.alarm = alarmCallbackPtr;
++	callbackStorage.coreCrashed = coreCrashedCallbackPtr;
++	callbackStorage.keysRead = keysReadCallbackPtr;
++	callbackStorage.savedataUpdated = saveDataUpdatedCallbackPtr;
++	callbackStorage.videoFrameEnded = videoFrameEndedCallbackPtr;
++	callbackStorage.videoFrameStarted = videoFrameStartedCallbackPtr;
++	callbackStorage.autoSaveStateCaptured = autoSaveStateCapturedCallbackPtr;
++	callbackStorage.autoSaveStateLoaded = autoSaveStateLoadedCallbackPtr;
++
++	struct mCoreCallbacks callbacks = {0};
++	if (alarmCallbackPtr)             callbacks.alarm = wrapped_alarm;
++	if (coreCrashedCallbackPtr)       callbacks.coreCrashed = wrapped_coreCrashed;
++	if (keysReadCallbackPtr)          callbacks.keysRead = wrapped_keysRead;
++	if (saveDataUpdatedCallbackPtr)   callbacks.savedataUpdated = wrapped_savedataUpdated;
++	if (videoFrameEndedCallbackPtr)   callbacks.videoFrameEnded = wrapped_videoFrameEnded;
++	if (videoFrameStartedCallbackPtr) callbacks.videoFrameStarted = wrapped_videoFrameStarted;
+ 
+-	// core settings when running
+-	if (renderer->core) {
+-		if (strcmp(settingName, "allowOpposingDirections") == 0 && (value == true || value == false)) {
+-			mCoreConfigSetDefaultIntValue(&renderer->core->config, "allowOpposingDirections", value);
+-			renderer->core->reloadConfigOption(renderer->core, "allowOpposingDirections", &renderer->core->config);
+-		} else if (strcmp(settingName, "rewindBufferCapacity") == 0 && value > 0) {
+-			renderer->core->opts.rewindBufferCapacity = value;
+-			mCoreThreadRewindParamsChanged(renderer->thread);
+-			mCoreConfigSetDefaultIntValue(&renderer->core->config, "rewindBufferCapacity", value);
+-			renderer->core->reloadConfigOption(renderer->core, "rewindBufferCapacity", &renderer->core->config);
+-		} else if (strcmp(settingName, "rewindBufferInterval") == 0 && value > 0) {
+-			renderer->core->opts.rewindBufferInterval = value;
+-			mCoreConfigSetDefaultIntValue(&renderer->core->config, "rewindBufferInterval", value);
+-			renderer->core->reloadConfigOption(renderer->core, "rewindBufferInterval", &renderer->core->config);
+-		} else if (strcmp(settingName, "frameSkip") == 0 && value >= 0) {
+-			mCoreConfigSetDefaultIntValue(&renderer->core->config, "frameskip", renderer->frameSkip);
+-			renderer->core->reloadConfigOption(renderer->core, "frameskip", &renderer->core->config);
+-		} else if (strcmp(settingName, "threadedVideo") == 0 && (value == true || value == false)) {
+-			mCoreConfigSetDefaultIntValue(&renderer->core->config, "threadedVideo", value);
+-			renderer->core->reloadConfigOption(renderer->core, "threadedVideo", &renderer->core->config);
+-		} else if (strcmp(settingName, "rewindEnable") == 0 && (value == true || value == false)) {
+-			renderer->core->opts.rewindEnable = value;
+-			mCoreThreadRewindParamsChanged(renderer->thread);
+-			mCoreConfigSetDefaultIntValue(&renderer->core->config, "rewindEnable", value);
+-			renderer->core->reloadConfigOption(renderer->core, "rewindEnable", &renderer->core->config);
+-		} else if (strcmp(settingName, "baseFpsTarget") == 0 && value >= 0.0) {
+-			renderer->thread->impl->sync.fpsTarget = (double) value * renderer->fastForwardMultiplier;
+-			mCoreConfigSetDefaultFloatValue(&renderer->core->config, "fpsTarget",
+-			                                (double) value * renderer->fastForwardMultiplier);
+-			renderer->core->reloadConfigOption(renderer->core, "fpsTarget", &renderer->core->config);
+-		} else if (strcmp(settingName, "timestepSync") == 0 && (value == true || value == false)) {
+-			mCoreConfigSetDefaultIntValue(&renderer->core->config, "timestepSync", value);
+-			renderer->core->reloadConfigOption(renderer->core, "timestepSync", &renderer->core->config);
+-		}
+-
+-		// thread settings when running
+-		if (renderer->thread && (value == true || value == false)) {
+-			mCoreThreadInterrupt(renderer->thread);
+-			if (strcmp(settingName, "videoSync") == 0) {
+-				renderer->thread->impl->sync.videoFrameWait = value;
+-			} else if (strcmp(settingName, "audioSync") == 0) {
+-				renderer->thread->impl->sync.audioWait = value;
+-			}
+-			mCoreThreadContinue(renderer->thread);
+-		}
+-	}
++	core->addCoreCallbacks(core, &callbacks);
+ }
+ 
+-/*
+- * Rendering utilities and emscripten main rendering loop
+- */
++/* ----- ROM loading ----- */
+ 
+-// keypress utilities
+-static void handleKeypressCore(const struct SDL_KeyboardEvent* event) {
+-	if (event->keysym.sym == SDLK_f && renderer->fastForwardMultiplier == 1) {
+-		updateFastForward(event->type == SDL_KEYDOWN ? 2 : 1);
+-		return;
+-	}
+-	if (event->keysym.sym == SDLK_r) {
+-		mCoreThreadSetRewinding(renderer->thread, event->type == SDL_KEYDOWN);
+-		return;
+-	}
+-	int key = -1;
+-	if (!(event->keysym.mod & ~(KMOD_NUM | KMOD_CAPS))) {
+-		key = mInputMapKey(&renderer->core->inputMap, SDL_BINDING_KEY, event->keysym.sym);
+-	}
+-	if (key != -1) {
+-		if (event->type == SDL_KEYDOWN) {
+-			renderer->core->addKeys(renderer->core, 1 << key);
+-		} else {
+-			renderer->core->clearKeys(renderer->core, 1 << key);
+-		}
+-	}
+-}
++/* Open (or reopen) a ROM from the VFS. Matches upstream signature so
++ * pre.js's Module.loadGame wrapper works unchanged. */
++EMSCRIPTEN_KEEPALIVE bool loadGame(const char* name, const char* savePathOverride) {
++	if (core) {
++		core->unloadROM(core);
++		mCoreConfigDeinit(&core->config);
++		core->deinit(core);
++		core = NULL;
++	}
++
++	core = mCoreFind(name);
++	if (!core) return false;
++
++	core->init(core);
++
++	/* VFS paths for autoload / save / state — match the upstream layout
++	 * so Phase 5 persistence paths (see docs/design/phase-5-persistence.md)
++	 * continue to resolve. */
++	core->opts.savegamePath = strdup("/data/saves");
++	core->opts.savestatePath = strdup("/data/states");
++	core->opts.cheatsPath = strdup("/data/cheats");
++	core->opts.screenshotPath = strdup("/data/screenshots");
++	core->opts.patchPath = strdup("/data/patches");
++
++	mCoreConfigInit(&core->config, "wasm");
++	/* useBios=false so the core boots the ROM directly without requiring a
++	 * gba_bios.bin in the VFS. Matches the default for headless v1 — a real
++	 * BIOS can be dropped into /data/ later by the user if desired. */
++	struct mCoreOptions defaults = {
++		.useBios = false,
++		.volume = 0x100,
++		.logLevel = mLOG_WARN | mLOG_ERROR | mLOG_FATAL,
++	};
++	mCoreConfigLoadDefaults(&core->config, &defaults);
++	mCoreLoadConfig(core);
+ 
+-// fps utilities
+-void updateFPS() {
+-	double now = emscripten_get_now();
+-
+-	if (renderer->fpsCounter.lastTime == 0) {
+-		renderer->fpsCounter.lastTime = now;
+-		return;
++	if (!mCoreLoadFile(core, name)) {
++		core->deinit(core);
++		core = NULL;
++		return false;
+ 	}
+ 
+-	renderer->fpsCounter.frames++;
++	mDirectorySetMapOptions(&core->dirs, &core->opts);
+ 
+-	double elapsed = now - renderer->fpsCounter.lastTime;
+-	if (elapsed >= 1000.0) { // every ~1 second
+-		renderer->fpsCounter.fps = (double) renderer->fpsCounter.frames * 1000.0 / elapsed;
+-		renderer->fpsCounter.frames = 0;
+-		renderer->fpsCounter.lastTime = now;
++	if (savePathOverride) {
++		mCoreLoadSaveFile(core, savePathOverride, false);
++	} else {
++		mCoreAutoloadSave(core);
+ 	}
+-}
++	mCoreAutoloadCheats(core);
++	mCoreAutoloadPatch(core);
+ 
+-void drawFPS(unsigned x, unsigned y) {
+-	char fpsBuf[32];
+-	snprintf(fpsBuf, sizeof(fpsBuf), "%.1f", renderer->fpsCounter.fps);
+-
+-	int scale = 1;
+-	int charWidth = 8 * scale;
+-	int charHeight = 10 * scale;
+-	int width = strlen(fpsBuf) * charWidth;
+-	int height = charHeight;
+-
+-	// save current draw color
+-	Uint8 prevR, prevG, prevB, prevA;
+-	SDL_GetRenderDrawColor(renderer->sdlRenderer, &prevR, &prevG, &prevB, &prevA);
+-
+-	// draw gray background
+-	SDL_SetRenderDrawColor(renderer->sdlRenderer, 64, 64, 64, 255);
+-	SDL_FRect bgRect = { x - 2, y - 2, width + 4, height + 4 };
+-	SDL_RenderFillRectF(renderer->sdlRenderer, &bgRect);
+-
+-	// draw white text
+-	SDL_SetRenderDrawColor(renderer->sdlRenderer, 255, 255, 255, 255);
+-	SDL_RenderText(renderer->sdlRenderer, fpsBuf, scale, x, y);
+-
+-	// restore original draw color
+-	SDL_SetRenderDrawColor(renderer->sdlRenderer, prevR, prevG, prevB, prevA);
+-}
+-
+-// auto save state utilities
+-void updateAutoSaveState() {
+-	double now = emscripten_get_now();
+-
+-	if (renderer->autoSaveStateTimer.lastTime == 0) {
+-		renderer->autoSaveStateTimer.lastTime = now;
+-		return;
+-	}
++	core->setVideoBuffer(core, videoBuffer, GBA_FB_W);
++	core->reset(core);
+ 
+-	double elapsed = now - renderer->autoSaveStateTimer.lastTime;
+-	if (elapsed >= renderer->autoSaveStateTimer.intervalSeconds * 1000) {
+-		bool successfulAutoSave = autoSaveState();
+-		if (successfulAutoSave) {
+-			renderer->autoSaveStateTimer.lastTime = now;
+-			if (callbackStorage.autoSaveStateCaptured)
+-				callbackStorage.autoSaveStateCaptured(NULL);
+-		}
+-	}
++	keyMask = 0;
++	return true;
+ }
+ 
+-// emscripten main run loop
+-void runLoop() {
+-	union SDL_Event event;
+-
+-	if (renderer->core) {
+-		if (!renderer->thread) {
+-			renderer->thread = malloc(sizeof(struct mCoreThread));
+-			memset(renderer->thread, 0, sizeof(struct mCoreThread));
+-
+-			renderer->thread->core = renderer->core;
+-			bool didFail = !mCoreThreadStart(renderer->thread);
+-			if (didFail)
+-				EM_ASM({ console.error("thread instantiation failed") });
+-
+-			mSDLInitAudio(&renderer->audio, renderer->thread);
+-			mSDLResumeAudio(&renderer->audio);
+-			updateFastForward(renderer->fastForwardMultiplier);
+-
+-			if (renderer->restoreAutoSaveStateOnLoad) {
+-				bool successfulLoad = loadAutoSaveState();
+-				if (successfulLoad && callbackStorage.autoSaveStateLoaded)
+-					callbackStorage.autoSaveStateLoaded(NULL);
+-			}
+-		}
+-
+-		if (mCoreThreadIsActive(renderer->thread)) {
+-			while (SDL_PollEvent(&event)) {
+-				switch (event.type) {
+-				case SDL_KEYDOWN:
+-				case SDL_KEYUP:
+-					if (renderer->core && renderer->thread) {
+-						handleKeypressCore(&event.key);
+-					}
+-					break;
+-				};
+-			}
+-			if (mCoreSyncWaitFrameStart(&renderer->thread->impl->sync)) {
+-				unsigned w, h;
+-				renderer->core->currentVideoSize(renderer->core, &w, &h);
+-
+-				SDL_Rect rect = { .x = 0, .y = 0, .w = w, .h = h };
+-
+-				SDL_UnlockTexture(renderer->sdlTex);
+-				SDL_RenderCopy(renderer->sdlRenderer, renderer->sdlTex, &rect, &rect);
+-				if (renderer->showFpsCounter)
+-					drawFPS(w - 35, h - LINE_HEIGHT);
+-				SDL_RenderPresent(renderer->sdlRenderer);
+-				int stride;
+-				SDL_LockTexture(renderer->sdlTex, 0, (void**) &renderer->outputBuffer, &stride);
+-				renderer->core->setVideoBuffer(renderer->core, renderer->outputBuffer, stride / BYTES_PER_PIXEL);
+-			}
+-			mCoreSyncWaitFrameEnd(&renderer->thread->impl->sync);
+-		}
+-		if (renderer->showFpsCounter)
+-			updateFPS();
+-		if (renderer->autoSaveStateEnable)
+-			updateAutoSaveState();
+-	} else {
+-		// dont run the main loop if there is no core,  we don't
+-		// want to handle events unless the core is running for now
+-		emscripten_pause_main_loop();
+-	}
++/* ----- Quit / reset ----- */
++
++EMSCRIPTEN_KEEPALIVE void quitGame(void) {
++	if (!core) return;
++	core->unloadROM(core);
++	mCoreConfigDeinit(&core->config);
++	core->deinit(core);
++	core = NULL;
++	keyMask = 0;
+ }
+ 
+-/*
+- * Initialization and main method (entrypoint)
+- */
++EMSCRIPTEN_KEEPALIVE void quitMgba(void) {
++	exit(0);
++}
+ 
+-void _log(struct mLogger* logger, int category, enum mLogLevel level, const char* format, va_list args) {
+-	UNUSED(logger);
+-	UNUSED(category);
+-	UNUSED(level);
+-	UNUSED(format);
+-	UNUSED(args);
++EMSCRIPTEN_KEEPALIVE void quickReload(void) {
++	if (!core) return;
++	core->reset(core);
+ }
+ 
++/* ----- Constants / module setup ----- */
++
+ EMSCRIPTEN_KEEPALIVE void setupConstants(void) {
+ 	EM_ASM(({
+-		       Module.version = {
+-			       gitCommit : UTF8ToString($0),
+-			       gitShort : UTF8ToString($1),
+-			       gitBranch : UTF8ToString($2),
+-			       gitRevision : $3,
+-			       binaryName : UTF8ToString($4),
+-			       projectName : UTF8ToString($5),
+-			       projectVersion : UTF8ToString($6)
+-		       };
+-	       }),
+-	       gitCommit, gitCommitShort, gitBranch, gitRevision, binaryName, projectName, projectVersion);
++		Module.version = {
++			gitCommit : UTF8ToString($0),
++			gitShort : UTF8ToString($1),
++			gitBranch : UTF8ToString($2),
++			gitRevision : $3,
++			binaryName : UTF8ToString($4),
++			projectName : UTF8ToString($5),
++			projectVersion : UTF8ToString($6)
++		};
++	}),
++	    gitCommit, gitCommitShort, gitBranch, gitRevision, binaryName, projectName, projectVersion);
+ }
+ 
+ CONSTRUCTOR(premain) {
+ 	setupConstants();
+ }
+ 
+-int excludeKeys(void* userdata, SDL_Event* event) {
+-	UNUSED(userdata);
+-
+-	switch (event->key.keysym.sym) {
+-	case SDLK_TAB: // ignored for a11y during gameplay
+-	case SDLK_SPACE:
+-		return 0; // Value will be ignored
+-	default:
+-		return 1;
+-	};
+-}
+-
+-int main() {
+-	renderer = malloc(sizeof(struct mEmscriptenRenderer));
+-	memset(renderer, 0, sizeof(struct mEmscriptenRenderer));
+-
+-	renderer->audio.sampleRate = 48000;
+-	renderer->audio.samples = 1024;
+-	renderer->baseFpsTarget = 60.0;
+-	renderer->rewindBufferCapacity = 600;
+-	renderer->rewindBufferInterval = 1;
+-	renderer->fastForwardMultiplier = 1;
+-	renderer->videoSync = false;
+-	renderer->audioSync = false;
+-	renderer->timestepSync = true;
+-	renderer->threadedVideo = false;
+-	renderer->rewindEnable = true;
+-	renderer->showFpsCounter = false;
+-	renderer->fpsCounter.lastTime = 0;
+-	renderer->fpsCounter.fps = 0;
+-	renderer->fpsCounter.frames = 0;
+-	renderer->autoSaveStateEnable = true;
+-	renderer->restoreAutoSaveStateOnLoad = true;
+-	renderer->autoSaveStateTimer.lastTime = 0;
+-	renderer->autoSaveStateTimer.intervalSeconds = 30;
+-
+-	mLogSetDefaultLogger(&logCtx);
+-
+-	SDL_Init(SDL_INIT_VIDEO);
+-	renderer->window = SDL_CreateWindow(NULL, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+-	                                    GBA_VIDEO_HORIZONTAL_PIXELS, GBA_VIDEO_VERTICAL_PIXELS, SDL_WINDOW_OPENGL);
+-	renderer->sdlRenderer =
+-	    SDL_CreateRenderer(renderer->window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+-
+-	// exclude specific key events
+-	SDL_SetEventFilter(excludeKeys, NULL);
+-
+-	emscripten_set_main_loop(runLoop, 0, 1);
+-
+-	free(renderer);
++/* main() is retained so callMain() has a target, but it does nothing.
++ * No SDL_Init, no thread spawning, no futex wait. Returns immediately;
++ * the rest of the surface is driven by JS calls to the KEEPALIVE exports. */
++int main(void) {
+ 	return 0;
+ }
