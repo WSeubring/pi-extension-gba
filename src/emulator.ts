@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import mGBA from "../vendor/mgba-wasm/dist/mgba.js";
+import { debugCore } from "./flags.js";
 import { romStem } from "./rom.js";
 import type { ButtonSink, GbaButton } from "./types.js";
 
@@ -353,7 +354,7 @@ export async function createEmulator(): Promise<Emulator> {
   // the widget layout. Override Module.print to drop these lines.
   // printErr stays live so Emscripten abort traces survive.
   // Set PI_GBA_DEBUG_CORE=1 to restore core logging for diagnostics.
-  const silencePrint = !process.env.PI_GBA_DEBUG_CORE;
+  const silencePrint = !debugCore();
   const module = await mGBA({
     canvas: null,
     ...(silencePrint ? { print: () => {} } : {}),

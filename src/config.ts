@@ -1,6 +1,7 @@
 import fsPromises from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { audioOverride, autoFocusOverride } from "./flags.js";
 import { expandHome } from "./paths.js";
 
 // Env vars:
@@ -187,14 +188,14 @@ export async function resolveConfig(): Promise<GbaConfig> {
   const base = normalize(merged);
 
   // Layer 3: env vars override
-  const envAutoFocus = process.env.PI_GBA_AUTO_FOCUS;
-  if (envAutoFocus !== undefined) {
-    base.autoFocusOnAgentStart = envAutoFocus !== "0";
+  const autoFocus = autoFocusOverride();
+  if (autoFocus !== undefined) {
+    base.autoFocusOnAgentStart = autoFocus;
   }
 
-  const envAudio = process.env.PI_GBA_AUDIO;
-  if (envAudio !== undefined) {
-    base.audio = envAudio !== "0";
+  const audio = audioOverride();
+  if (audio !== undefined) {
+    base.audio = audio;
   }
 
   return base;

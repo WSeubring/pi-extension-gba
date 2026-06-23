@@ -43,6 +43,7 @@ import {
   isKeyRelease,
   matchesKey,
 } from "@mariozechner/pi-tui";
+import { renderTrace } from "./flags.js";
 import { HeldButtons } from "./held-buttons.js";
 import { classifyGbaKey } from "./input.js";
 import type { ButtonSink } from "./types.js";
@@ -75,7 +76,7 @@ const FOOTER_ROWS = 3;
 const HEIGHT_RATIO = 0.9;
 
 /** PI_GBA_RENDER_TRACE=1 → stderr-log placement pins + input bytes. */
-const RENDER_TRACE = process.env.PI_GBA_RENDER_TRACE === "1";
+const RENDER_TRACE = renderTrace();
 
 // ---------------------------------------------------------------------------
 // Raw-file path resolution

@@ -6,6 +6,7 @@ import { detectCapabilities } from "./capabilities.js";
 import { registerAll } from "./commands.js";
 import { resolveConfig } from "./config.js";
 import { createEmulator } from "./emulator.js";
+import { minimalMode } from "./flags.js";
 import type { RenderController } from "./lifecycle.js";
 import { createLifecycle, NOOP_RENDER } from "./lifecycle.js";
 import { createUnsupportedNotifier, requireAudio, toggleMute } from "./messages.js";
@@ -26,7 +27,7 @@ export default async function activate(pi: ExtensionAPI): Promise<void> {
   // Minimal-mode escape hatch. Set PI_GBA_MINIMAL=1 to skip auto-focus,
   // lifecycle coupling, audio, and the /gba config menu — /gba mounts
   // ctx.ui.custom directly. See src/minimal-activate.ts for rationale.
-  if (process.env.PI_GBA_MINIMAL === "1") {
+  if (minimalMode()) {
     await activateMinimal(pi);
     return;
   }

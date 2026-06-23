@@ -1,6 +1,7 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { audioOverride } from "./flags.js";
 
 // ---------------------------------------------------------------------------
 // Test seam — spawn factory (overridden in tests via __setSpawnForTest)
@@ -355,10 +356,7 @@ class AudioPlayerImpl extends EventEmitter implements AudioPlayer {
  * PI_GBA_AUDIO=1 forces it on; otherwise cfg decides.
  */
 export function audioEnabled(cfgAudio: boolean): boolean {
-  const env = process.env.PI_GBA_AUDIO;
-  if (env === "0") return false;
-  if (env === "1") return true;
-  return cfgAudio === true;
+  return audioOverride() ?? cfgAudio === true;
 }
 
 /**

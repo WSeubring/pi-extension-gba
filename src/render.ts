@@ -6,6 +6,7 @@ import type { ExtensionContext, WidgetPlacement } from "@mariozechner/pi-coding-
 import { allocateImageId, deleteKittyImage, Image } from "@mariozechner/pi-tui";
 import { encode as encodePng } from "fast-png";
 import type { AudioPlayer } from "./audio.js";
+import { audioTrace, frameDumpDir, frameDumpEvery } from "./flags.js";
 import { makeUpscaler } from "./upscale.js";
 
 const GBA_W = 240;
@@ -267,14 +268,14 @@ class CustomRenderBackend implements RenderBackend {
   private dumpSeq = 0;
 
   constructor() {
-    const dir = process.env.PI_GBA_FRAME_DUMP;
+    const dir = frameDumpDir();
     let dumpDir: string | undefined;
-    if (dir && dir.length > 0) {
+    if (dir) {
       try {
         mkdirSync(dir, { recursive: true });
         dumpDir = dir;
       } catch (e) {
-        if (process.env.PI_GBA_AUDIO_TRACE === "1") {
+        if (audioTrace()) {
           process.stderr.write(
             `[pi-extension-gba] frame-dump disabled: mkdir ${dir} failed: ${(e as Error).message}\n`,
           );
@@ -282,8 +283,7 @@ class CustomRenderBackend implements RenderBackend {
       }
     }
     this.dumpDir = dumpDir;
-    const everyRaw = Number.parseInt(process.env.PI_GBA_FRAME_DUMP_EVERY ?? "", 10);
-    this.dumpEvery = Number.isFinite(everyRaw) && everyRaw > 0 ? everyRaw : 30;
+    this.dumpEvery = frameDumpEvery();
   }
 
   setComponent(component: GbaGameComponent): void {
@@ -446,7 +446,7 @@ export function createRenderer(
   // samples pulled per tick, and stdin writableLength at emission time.
   // Traces go to stderr; pi's TUI is expected to surface them inline in Ghostty
   // (the same path lifecycle diagnostics use; see lifecycle.ts:56 note).
-  const audioTraceEnabled = process.env.PI_GBA_AUDIO_TRACE === "1";
+  const audioTraceEnabled = audioTrace();
   let lastTickAt = 0;
 
   function tick(): void {
