@@ -68,7 +68,7 @@ function makeGreenRgba(widthPx: number, heightPx: number): Uint8Array {
 }
 
 function makeComponent(sink: ButtonSink, tui: TUI, done: (r: undefined) => void = () => {}): GbaGameComponent {
-  return new GbaGameComponent(tui, { emulator: {}, sink, scale: SCALE as 2 }, done);
+  return new GbaGameComponent(tui, { sink, scale: SCALE as 2 }, done);
 }
 
 // ---------------------------------------------------------------------------

@@ -553,7 +553,6 @@ for (const { label, bytes } of EXIT_KEYS) {
     const component = new GbaGameComponent(
       makeFakeTui(),
       {
-        emulator: {},
         sink: fakeEmulator as unknown as ButtonSink,
         scale: 2,
       },
@@ -572,7 +571,6 @@ test("scenario 4 (release guard): alt+g key-RELEASE does NOT exit game mode", ()
   const component = new GbaGameComponent(
     makeFakeTui(),
     {
-      emulator: {},
       sink: { press() {}, release() {} } as unknown as ButtonSink,
       scale: 2,
     },

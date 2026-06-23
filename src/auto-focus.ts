@@ -141,11 +141,7 @@ export function createAutoFocus(deps: AutoFocusDeps): AutoFocus {
 
     try {
       await ctx.ui.custom((tui, _theme, _keybindings, done) => {
-        const component = new GbaGameComponent(
-          tui,
-          { emulator: emulator as unknown, sink: emulator, scale: cfg.scale },
-          done,
-        );
+        const component = new GbaGameComponent(tui, { sink: emulator, scale: cfg.scale }, done);
 
         // Only mount if THIS session is still the one entering. exit() may
         // have set closeRequested while we awaited audio.start.

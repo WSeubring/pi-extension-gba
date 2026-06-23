@@ -13,7 +13,7 @@ const MAX_ROM_BYTES = 32 * 1024 * 1024;
 const SCRATCH_FRAMES = 2048;
 const SCRATCH_BYTES = SCRATCH_FRAMES * 2 * 2; // stereo × int16 = 8192 B
 
-const BUTTON_NAMES: Record<GbaButton, string> = {
+const BUTTON_NAMES = {
   up: "Up",
   down: "Down",
   left: "Left",
@@ -24,7 +24,7 @@ const BUTTON_NAMES: Record<GbaButton, string> = {
   r: "R",
   start: "Start",
   select: "Select",
-};
+} satisfies Record<GbaButton, string>;
 
 export class EmulatorNotLoadedError extends Error {
   constructor(message = "Emulator has no ROM loaded") {
@@ -34,15 +34,15 @@ export class EmulatorNotLoadedError extends Error {
 }
 
 export class RomLoadError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options as ErrorOptions | undefined);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "RomLoadError";
   }
 }
 
 export class StateIoError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options as ErrorOptions | undefined);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "StateIoError";
   }
 }
@@ -55,6 +55,27 @@ export class EmulatorCrashError extends Error {
 }
 
 type MgbaModule = Awaited<ReturnType<typeof mGBA>>;
+
+/**
+ * Raw Emscripten exports the vendored `MgbaModule` type does not declare. We
+ * reach them directly (`runFrame` may gain a JS-level wrapper in a future
+ * pre.js patch; the rest are heap/alloc primitives). Declaring their shape once
+ * here replaces the per-call-site `as unknown as {...}` casts, so a vendor
+ * type bump that adds these surfaces a mismatch at compile time.
+ */
+interface MgbaLowLevel {
+  runFrame?: () => void;
+  _runFrame?: () => void;
+  _getAudioSamples?: (dest: number, max: number) => number;
+  _malloc: (size: number) => number;
+  _free: (ptr: number) => void;
+  HEAP16: Int16Array;
+}
+
+/** The raw low-level export view of a module — cast once, declared once. */
+function lowLevel(module: MgbaModule): MgbaLowLevel {
+  return module as unknown as MgbaLowLevel;
+}
 
 type SramListener = (bytes: Uint8Array) => void;
 type CrashListener = (err: Error) => void;
@@ -155,10 +176,7 @@ export class Emulator implements ButtonSink {
     // Post-ADR 0002 the SDL-free vendored host exposes a synchronous
     // per-frame advance. We prefer a JS-level `runFrame` wrapper if a future
     // pre.js patch adds one, else reach the raw Emscripten export directly.
-    const mod = this.#module as unknown as {
-      runFrame?: () => void;
-      _runFrame?: () => void;
-    };
+    const mod = lowLevel(this.#module);
     const rf = mod.runFrame ?? mod._runFrame;
     if (typeof rf !== "function") {
       throw new EmulatorCrashError("mGBA runFrame export missing — vendor build predates ADR 0002");
@@ -267,10 +285,7 @@ export class Emulator implements ButtonSink {
     const capped = Math.min(Math.max(0, Math.floor(maxFrames)), SCRATCH_FRAMES);
     if (capped === 0) return new Int16Array(0);
 
-    const mod = this.#module as unknown as {
-      _getAudioSamples?: (dest: number, max: number) => number;
-      HEAP16: Int16Array;
-    };
+    const mod = lowLevel(this.#module);
     if (typeof mod._getAudioSamples !== "function") {
       throw new EmulatorCrashError("mGBA getAudioSamples export missing — vendor build predates ADR 0006");
     }
@@ -306,7 +321,7 @@ export class Emulator implements ButtonSink {
     this.#crashListeners.length = 0;
     this.#loaded = false;
     if (this.#scratchPtr !== 0) {
-      const mod = this.#module as unknown as { _free: (ptr: number) => void };
+      const mod = lowLevel(this.#module);
       mod._free(this.#scratchPtr);
       this.#scratchPtr = 0;
     }
@@ -344,7 +359,7 @@ export async function createEmulator(): Promise<Emulator> {
     ...(silencePrint ? { print: () => {} } : {}),
   });
   await module.FSInit();
-  const mod = module as unknown as { _malloc: (size: number) => number };
+  const mod = lowLevel(module);
   const scratchPtr = mod._malloc(SCRATCH_BYTES);
   return new Emulator(module, scratchPtr);
 }

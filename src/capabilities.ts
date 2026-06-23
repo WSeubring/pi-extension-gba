@@ -11,12 +11,12 @@ const AUDIO_ORDER: AudioBackend[] = ["pw-cat", "pacat", "ffplay", "aplay"];
 
 // Per-tool probe args: ffplay (ffmpeg-style) only accepts `-version` and
 // exits 1 on `--version`, so a uniform `--version` probe would never detect it.
-const PROBE_ARGS: Record<AudioBackend, string[]> = {
+const PROBE_ARGS = {
   "pw-cat": ["--version"],
   pacat: ["--version"],
   ffplay: ["-version"],
   aplay: ["--version"],
-};
+} satisfies Record<AudioBackend, string[]>;
 
 /** Injectable for tests — matches the spawnSync subset the probe needs. */
 export type ProbeSpawn = (

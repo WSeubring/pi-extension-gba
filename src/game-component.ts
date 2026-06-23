@@ -52,9 +52,7 @@ import type { ButtonSink } from "./types.js";
 // ---------------------------------------------------------------------------
 
 export interface GameComponentDeps {
-  /** EmulatorLike — provides frames. */
-  emulator: unknown; // reserved; frames arrive via acceptFrame
-  /** ButtonSink — receives press/release events. */
+  /** ButtonSink — receives press/release events. Frames arrive via acceptFrame. */
   sink: ButtonSink;
   /** Display scale from cfg (1×, 2×, 3×). */
   scale: 1 | 2 | 3;

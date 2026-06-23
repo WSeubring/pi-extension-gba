@@ -8,8 +8,8 @@ import { hasGbaExtension, romStem } from "./rom.js";
 export { StateIoError };
 
 export class SaveIoError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options as ErrorOptions | undefined);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "SaveIoError";
   }
 }

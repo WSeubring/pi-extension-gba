@@ -429,7 +429,7 @@ test("end-to-end: emulator framebuffer flows as raw RGBA to GbaGameComponent und
   } as unknown as TUI;
 
   const sinkStub = { press() {}, release() {} };
-  const component = new RealGameComponent(tuiStub, { emulator: {}, sink: sinkStub, scale: 2 }, () => {});
+  const component = new RealGameComponent(tuiStub, { sink: sinkStub, scale: 2 }, () => {});
   renderer.setCustomComponent(component);
   renderer.useBackend("custom");
 
