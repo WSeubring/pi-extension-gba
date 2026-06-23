@@ -185,3 +185,7 @@ The exact source revision, patch set, and a reproducible Docker build are
 documented in `vendor/mgba-wasm/` (`README.md` + `BUILD.md`).
 
 ROMs are not included. Use ROMs you legally own.
+
+---
+
+> _This project was built with the help of AI._
