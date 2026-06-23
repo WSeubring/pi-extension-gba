@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import mGBA from "../vendor/mgba-wasm/dist/mgba.js";
+import { romStem } from "./rom.js";
 import type { ButtonSink, GbaButton } from "./types.js";
 
 export const GBA_WIDTH = 240 as const;
@@ -108,7 +109,7 @@ export class Emulator implements ButtonSink {
 
     if (this.#pendingSram) {
       const savePath = this.#module.filePaths().savePath;
-      const savName = `${Emulator.#gbaStem(basename)}.sav`;
+      const savName = `${romStem(basename)}.sav`;
       const vfsSavPath = `${savePath}/${savName}`;
       try {
         this.#module.FS.writeFile(vfsSavPath, this.#pendingSram);
@@ -311,22 +312,12 @@ export class Emulator implements ButtonSink {
     }
   }
 
-  /**
-   * Strip the .gba extension case-insensitively. Shared by SRAM seeding and
-   * save-state paths so a `GAME.GBA` ROM derives the same stem for both —
-   * a case-sensitive mismatch would seed pending SRAM under a wrong filename.
-   */
-  static #gbaStem(name: string): string {
-    return name.replace(/\.gba$/i, "");
-  }
-
   #stateVfsPath(slot: number): string {
     if (!this.#gameBasename) {
       throw new EmulatorNotLoadedError();
     }
     const saveStateDir = this.#module.filePaths().saveStatePath;
-    const stem = Emulator.#gbaStem(this.#gameBasename);
-    return `${saveStateDir}/${stem}.ss${slot}`;
+    return `${saveStateDir}/${romStem(this.#gameBasename)}.ss${slot}`;
   }
 }
 

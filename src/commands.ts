@@ -16,6 +16,7 @@ import type { Lifecycle, RenderController } from "./lifecycle.js";
 import { MSG, requireAudio } from "./messages.js";
 import type { Persistence } from "./persistence.js";
 import { showRomPicker } from "./picker.js";
+import { ensureGbaExtension } from "./rom.js";
 
 export interface CommandDeps {
   emulator: Emulator;
@@ -141,7 +142,7 @@ async function cmdReset(ctx: ExtensionCommandContext, deps: CommandDeps): Promis
 
 async function cmdLoadByName(ctx: ExtensionCommandContext, deps: CommandDeps, token: string): Promise<void> {
   deps.ensureRender(ctx);
-  const basename = token.endsWith(".gba") ? token : `${token}.gba`;
+  const basename = ensureGbaExtension(token);
 
   const roms = await deps.persistence.listRoms();
   if (!roms.includes(basename)) {

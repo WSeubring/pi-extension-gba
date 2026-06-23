@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Emulator } from "./emulator.js";
 import { StateIoError } from "./emulator.js";
 import { expandHome } from "./paths.js";
+import { hasGbaExtension, romStem } from "./rom.js";
 
 export { StateIoError };
 
@@ -42,10 +43,6 @@ function resolveRomDir(romDir: string): string {
   // `expandHome` resolves the tilde forms; `path.resolve` makes a plain
   // relative dir absolute (no-op once already absolute, e.g. after expansion).
   return path.resolve(expandHome(romDir));
-}
-
-function stripGba(basename: string): string {
-  return basename.replace(/\.gba$/, "");
 }
 
 async function pathExists(p: string): Promise<boolean> {
@@ -111,7 +108,7 @@ export function createPersistence(emulator: Emulator, opts: PersistenceOptions):
       pendingBytes = undefined;
       return;
     }
-    const savPath = path.join(romDir, `${stripGba(pendingTarget)}.sav`);
+    const savPath = path.join(romDir, `${romStem(pendingTarget)}.sav`);
     const bytes = pendingBytes;
     pendingBytes = undefined;
     try {
@@ -180,7 +177,7 @@ export function createPersistence(emulator: Emulator, opts: PersistenceOptions):
   async function snapshot(): Promise<void> {
     if (!currentBasename || loading) return;
     const bytes = emulator.saveState();
-    const statePath = path.join(romDir, `${stripGba(currentBasename)}.state`);
+    const statePath = path.join(romDir, `${romStem(currentBasename)}.state`);
     // Serialize on the shared write chain: concurrent snapshot() callers
     // (30 s auto-snapshot, onPause, ROM switch, session_shutdown) share the
     // same `.state.tmp` path, so an overlap can rename the other writer's
@@ -203,7 +200,7 @@ export function createPersistence(emulator: Emulator, opts: PersistenceOptions):
     if (basename.includes("/") || basename.includes("\\")) {
       throw new Error(`[pi-extension-gba] basename must not contain path separators: ${basename}`);
     }
-    if (!basename.endsWith(".gba")) {
+    if (!hasGbaExtension(basename)) {
       throw new Error(`[pi-extension-gba] basename must end with .gba: ${basename}`);
     }
 
@@ -222,8 +219,8 @@ export function createPersistence(emulator: Emulator, opts: PersistenceOptions):
     loadingBasename = basename;
     try {
       const romPath = path.join(romDir, basename);
-      const savPath = path.join(romDir, `${stripGba(basename)}.sav`);
-      const statePath = path.join(romDir, `${stripGba(basename)}.state`);
+      const savPath = path.join(romDir, `${romStem(basename)}.sav`);
+      const statePath = path.join(romDir, `${romStem(basename)}.state`);
 
       let seededSavBytes: Uint8Array | undefined;
       if (await pathExists(savPath)) {
@@ -289,7 +286,7 @@ export function createPersistence(emulator: Emulator, opts: PersistenceOptions):
     } catch {
       return [];
     }
-    return entries.filter((e) => e.endsWith(".gba")).sort();
+    return entries.filter((e) => hasGbaExtension(e)).sort();
   }
 
   async function lastPlayed(): Promise<string | undefined> {
@@ -316,7 +313,7 @@ export function createPersistence(emulator: Emulator, opts: PersistenceOptions):
 
   async function clearState(): Promise<void> {
     if (!currentBasename) return;
-    const statePath = path.join(romDir, `${stripGba(currentBasename)}.state`);
+    const statePath = path.join(romDir, `${romStem(currentBasename)}.state`);
     try {
       await unlink(statePath);
     } catch (e) {
